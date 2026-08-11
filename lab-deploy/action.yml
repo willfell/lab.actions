@@ -74,6 +74,12 @@ runs:
         # This only survives because root-app carries ignoreDifferences +
         # RespectIgnoreDifferences on /spec/source/helm/parameters; without
         # both, root reverts this on its next reconcile.
+        #
+        # `--type merge` replaces the WHOLE parameters array (JSON merge patch
+        # semantics on a list field), not just these two entries. Safe today
+        # only because no Application declares helm.parameters in git — and
+        # that must stay true: a parameters block committed to git would be
+        # wiped by the first deploy from this step and never restored.
         kubectl -n argocd patch application "$APP" --type merge -p "$(cat <<JSON
         {"spec":{"source":{"helm":{"parameters":[
           {"name":"image.tag","value":"${TAG}"},
