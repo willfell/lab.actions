@@ -64,9 +64,6 @@ runs:
         IS_FORK_PR: ${{ github.event.pull_request.head.repo.full_name != '' && github.event.pull_request.head.repo.full_name != github.repository }}
       run: |
         set -euo pipefail
-        # Branch-name matching alone is spoofable from a fork (name a branch
-        # "main" there), so this hard-fails the job before the registry push
-        # rather than merely skipping promotion.
         if [ "$IS_FORK_PR" = "true" ]; then
           echo "::error::Refusing to run — pull_request head repo is not this repository."
           exit 1
@@ -94,12 +91,6 @@ runs:
         FALLBACK_TAG: ${{ inputs.fallback_tag }}
       run: |
         set -uo pipefail
-        # `gh` is NOT installed on the pinned runner image
-        # (ghcr.io/actions/actions-runner:latest) — only curl, jq, git, docker
-        # are present. Talk to the REST API with curl directly, and check the
-        # HTTP status explicitly so "not found" (404), "no permission" (403),
-        # and a transport/tool failure are distinguishable in the log instead
-        # of all collapsing into a silent non-zero-that-gets-swallowed.
         api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
         status="$(curl -s -o "$RUNNER_TEMP/ref_check.json" -w '%{http_code}' \
           -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -116,10 +107,6 @@ runs:
           echo "::error::Shallow checkout — set 'fetch-depth: 0' on actions/checkout." >&2
           exit 1
         fi
-        # The ROOT commit, not HEAD: semver-action counts commits in the range
-        # fallbackTag..branch to pick the bump, so anchoring at HEAD gives an
-        # empty range and (with noNewCommitBehavior: current) pins the first
-        # build to 0.0.0 forever.
         ROOT_SHA="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
         create_status="$(curl -s -o "$RUNNER_TEMP/ref_create.json" -w '%{http_code}' \
           -X POST \
@@ -143,11 +130,6 @@ runs:
           echo "  -f ref=refs/tags/${FALLBACK_TAG} -f sha=${ROOT_SHA}"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
-        # Fatal, not a warning: proceeding with no baseline tag is what makes
-        # semver-action resolve latestTag=0.0.0, 404 on
-        # compareCommitsWithBasehead('0.0.0...branch'), and die with a raw
-        # unhandled-rejection stack trace two steps downstream — burying the
-        # real cause. Fail here instead, where the cause is visible.
         echo "::error::Could not create ${FALLBACK_TAG} (HTTP ${create_status}) — see the job summary."
         exit 1
 
@@ -183,12 +165,6 @@ runs:
         SHA_ARG: ${{ inputs.git_sha_build_arg }}
       run: |
         set -euo pipefail
-        # The semver tag is supposed to be immutable: a re-run of the pipeline
-        # on a commit that already released recomputes the same version, and
-        # an unconditional `crane push` would silently overwrite the tag with
-        # a fresh, non-reproducible digest — anything pinned to it would get
-        # different bytes with no signal. Probe first; a re-run landing on an
-        # existing tag is a legitimate no-op, not a failure, on either path.
         if crane manifest --insecure "$REGISTRY/$IMAGE:$VERSION" >/dev/null 2>&1; then
           digest="$(crane digest --insecure "$REGISTRY/$IMAGE:$VERSION")"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
@@ -200,16 +176,11 @@ runs:
           args+=(--build-arg "$SHA_ARG=$GITHUB_SHA")
         fi
         docker build "${args[@]}" "$BUILD_CONTEXT"
-        # crane, not `docker push`: dockerd refuses plain HTTP to a
-        # non-localhost registry, and reconfiguring ARC's injected dind
-        # sidecar would couple CI to that chart's internals.
         docker save "$IMAGE:$VERSION" -o "$RUNNER_TEMP/image.tar"
         crane push --insecure "$RUNNER_TEMP/image.tar" "$REGISTRY/$IMAGE:$VERSION"
         digest="$(crane digest --insecure "$REGISTRY/$IMAGE:$VERSION")"
         echo "digest=${digest}" >> "$GITHUB_OUTPUT"
         echo "Pushed $REGISTRY/$IMAGE:$VERSION @ ${digest}"
-        # These are persistent ARC runner pods, not ephemeral VMs — an
-        # unbounded image.tar drove a node into DiskPressure on 2026-08-10.
         rm -f "$RUNNER_TEMP/image.tar"
 
     - name: Move the environment pointer tag
@@ -222,8 +193,6 @@ runs:
         POINTER: ${{ inputs.environment }}
       run: |
         set -euo pipefail
-        # Retag, never rebuild: the pointer must resolve to the exact digest
-        # that was just verified, not to a fresh build of the same source.
         crane tag --insecure "$REGISTRY/$IMAGE:$VERSION" "$POINTER"
         echo "$REGISTRY/$IMAGE:$POINTER -> $VERSION"
 
