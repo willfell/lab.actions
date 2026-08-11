@@ -1,0 +1,169 @@
+name: "Lab Deploy — Point an Argo Application at a new image"
+description: >
+  Sets image.tag/image.digest as Helm parameters on an Argo CD Application,
+  forces a sync, waits for the Deployment to actually be running that digest
+  with the Application Synced and Healthy, then optionally smoke-checks an
+  HTTP surface. No git write-back: the deployed identity lives as Application
+  parameters, not as a commit.
+author: "willfell"
+
+inputs:
+  app_name:
+    description: "Argo CD Application name (in the argocd namespace)"
+    required: true
+  namespace:
+    description: "Namespace the workload runs in"
+    required: true
+  deployment:
+    description: "Deployment name to wait on"
+    required: false
+    default: "mcp-server"
+  image_repository:
+    description: "PULL-side image repository rendered into the chart"
+    required: true
+  image_tag:
+    description: "Immutable semver tag to deploy"
+    required: true
+  image_digest:
+    description: >
+      Digest to deploy. Load-bearing: without it a moved pointer tag lets Argo
+      report Synced while the running image silently changed.
+    required: true
+  wait_timeout:
+    description: "Seconds to wait for convergence"
+    required: false
+    default: "600"
+  health_url:
+    description: "Optional in-cluster URL to curl after convergence"
+    required: false
+    default: ""
+
+outputs:
+  sync_status:
+    description: "Final Application sync status"
+    value: ${{ steps.wait.outputs.sync_status }}
+  health_status:
+    description: "Final Application health status"
+    value: ${{ steps.wait.outputs.health_status }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install kubectl
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/bin"
+        curl -fsSLo "$RUNNER_TEMP/bin/kubectl" https://dl.k8s.io/release/v1.35.0/bin/linux/arm64/kubectl
+        chmod +x "$RUNNER_TEMP/bin/kubectl"
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+    - name: Set the image parameters on the Application
+      shell: bash
+      env:
+        APP: ${{ inputs.app_name }}
+        TAG: ${{ inputs.image_tag }}
+        DIGEST: ${{ inputs.image_digest }}
+      run: |
+        set -euo pipefail
+        # The equivalent of `argocd app set -p image.tag -p image.digest`. The
+        # lab exposes no Argo API ingress, so this goes through the Kubernetes
+        # API with the runner pod's ServiceAccount, whose Role is scoped to
+        # this Application by resourceNames.
+        #
+        # This only survives because root-app carries ignoreDifferences +
+        # RespectIgnoreDifferences on /spec/source/helm/parameters; without
+        # both, root reverts this on its next reconcile.
+        kubectl -n argocd patch application "$APP" --type merge -p "$(cat <<JSON
+        {"spec":{"source":{"helm":{"parameters":[
+          {"name":"image.tag","value":"${TAG}"},
+          {"name":"image.digest","value":"${DIGEST}"}
+        ]}}}}
+        JSON
+        )"
+        kubectl -n argocd get application "$APP" \
+          -o jsonpath='{.spec.source.helm.parameters}{"\n"}'
+
+    - name: Tell Argo to sync now
+      shell: bash
+      env:
+        APP: ${{ inputs.app_name }}
+      run: |
+        set -euo pipefail
+        kubectl -n argocd patch application "$APP" --type merge -p \
+          '{"operation":{"initiatedBy":{"username":"ci"},"sync":{}}}'
+
+    - name: Wait for the workload to actually run this digest
+      id: wait
+      shell: bash
+      env:
+        APP: ${{ inputs.app_name }}
+        NS: ${{ inputs.namespace }}
+        DEPLOY: ${{ inputs.deployment }}
+        REPO: ${{ inputs.image_repository }}
+        TAG: ${{ inputs.image_tag }}
+        DIGEST: ${{ inputs.image_digest }}
+        TIMEOUT: ${{ inputs.wait_timeout }}
+      run: |
+        set -uo pipefail
+        # Asserts the DEPLOYED IMAGE, not Argo's reported git revision: the
+        # Application tracks a branch tip, so by reconcile time it can already
+        # be on a later commit than the one that triggered this run. What
+        # matters is that the workload is running the image we just built.
+        want="${REPO}:${TAG}@${DIGEST}"
+        deadline=$(( SECONDS + TIMEOUT ))
+        sync=""; health=""; got=""
+        while [ "$SECONDS" -lt "$deadline" ]; do
+          got="$(kubectl -n "$NS" get deploy "$DEPLOY" \
+            -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+          sync="$(kubectl -n argocd get application "$APP" \
+            -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+          health="$(kubectl -n argocd get application "$APP" \
+            -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+          if [ "$got" = "$want" ] && [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ]; then
+            break
+          fi
+          sleep 10
+        done
+        echo "sync_status=${sync}" >> "$GITHUB_OUTPUT"
+        echo "health_status=${health}" >> "$GITHUB_OUTPUT"
+        if [ "$got" != "$want" ]; then
+          echo "::error::timed out — deployment image is '${got}', wanted '${want}' (sync=${sync} health=${health})"
+          exit 1
+        fi
+        if [ "$sync" != "Synced" ] || [ "$health" != "Healthy" ]; then
+          echo "::error::image matched but Application is sync=${sync} health=${health}"
+          exit 1
+        fi
+        kubectl -n "$NS" rollout status "deploy/${DEPLOY}" --timeout=5m
+
+    - name: Smoke-check the HTTP surface
+      if: inputs.health_url != ''
+      shell: bash
+      env:
+        URL: ${{ inputs.health_url }}
+      run: |
+        set -euo pipefail
+        # Not an identity proof — the wait above already held the Deployment to
+        # the exact digest. This only confirms the surface answers post-sync.
+        curl -fsS "$URL" -o /dev/null
+        echo "serving: $URL"
+
+    - name: Summarize the deployment
+      if: always()
+      shell: bash
+      env:
+        APP: ${{ inputs.app_name }}
+        TAG: ${{ inputs.image_tag }}
+        DIGEST: ${{ inputs.image_digest }}
+        SYNC: ${{ steps.wait.outputs.sync_status }}
+        HEALTH: ${{ steps.wait.outputs.health_status }}
+      run: |
+        {
+          echo "### ${APP}"
+          echo ""
+          echo "- version: \`${TAG}\`"
+          echo "- digest: \`${DIGEST}\`"
+          echo "- sync: \`${SYNC:-Unknown}\`"
+          echo "- health: \`${HEALTH:-Unknown}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
