@@ -1,0 +1,216 @@
+name: "Lab Build — Version, Build, Push, Promote, Release"
+description: >
+  Computes the next semver from Conventional Commits, builds the image, pushes
+  it to the in-cluster OCI registry under an immutable semver tag, moves a
+  mutable environment pointer tag onto the same digest, and cuts a GitHub
+  release. Deployment is the sibling `lab-deploy` composite.
+author: "willfell"
+
+inputs:
+  registry:
+    description: "PUSH-side registry address (cluster DNS, not the node's NodePort)"
+    required: false
+    default: "registry.network.svc.cluster.local:5000"
+  image:
+    description: "Image name within the registry (e.g. ero-mcp)"
+    required: true
+  dockerfile:
+    description: "Path to the Dockerfile"
+    required: false
+    default: "./Dockerfile"
+  build_context:
+    description: "Docker build context directory"
+    required: false
+    default: "./"
+  environment:
+    description: >
+      Mutable pointer tag moved onto this build's digest (e.g. test). Only
+      moved on a branch listed in promote_branches.
+    required: true
+  fallback_tag:
+    description: "Semver baseline, seeded at the ROOT commit on a repo with no tags"
+    required: false
+    default: "0.0.0"
+  create_release:
+    description: "Cut a GitHub release for the computed version (true/false)"
+    required: false
+    default: "true"
+  promote_branches:
+    description: "Comma-separated branches allowed to move the pointer and release"
+    required: false
+    default: "main"
+  git_sha_build_arg:
+    description: >
+      Build arg receiving the commit sha. .dockerignore excludes .git, so the
+      image cannot read its own sha at runtime. Empty disables it.
+    required: false
+    default: "ERO_MCP_GIT_SHA"
+
+outputs:
+  version:
+    description: "Semver computed for this run"
+    value: ${{ steps.semver.outputs.next }}
+  digest:
+    description: "Digest of the pushed image (sha256:...)"
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: gate
+      name: Reject fork-originated runs before any credentialed step
+      shell: bash
+      env:
+        IS_FORK_PR: ${{ github.event.pull_request.head.repo.full_name != '' && github.event.pull_request.head.repo.full_name != github.repository }}
+      run: |
+        set -euo pipefail
+        # Branch-name matching alone is spoofable from a fork (name a branch
+        # "main" there), so this hard-fails the job before the registry push
+        # rather than merely skipping promotion.
+        if [ "$IS_FORK_PR" = "true" ]; then
+          echo "::error::Refusing to run — pull_request head repo is not this repository."
+          exit 1
+        fi
+
+    - id: promote_gate
+      name: Resolve the promote/release gate
+      shell: bash
+      env:
+        PROMOTE_BRANCHES: ${{ inputs.promote_branches }}
+        REF_NAME: ${{ github.head_ref || github.ref_name }}
+      run: |
+        set -euo pipefail
+        allowed="false"
+        IFS=',' read -ra branches <<< "$PROMOTE_BRANCHES"
+        for b in "${branches[@]}"; do
+          if [ "$(echo "$b" | xargs)" = "$REF_NAME" ]; then allowed="true"; break; fi
+        done
+        echo "promote=${allowed}" >> "$GITHUB_OUTPUT"
+
+    - name: Bootstrap the semver baseline tag
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        FALLBACK_TAG: ${{ inputs.fallback_tag }}
+      run: |
+        set -uo pipefail
+        if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${FALLBACK_TAG}" >/dev/null 2>&1; then
+          echo "Tag ${FALLBACK_TAG} already exists; nothing to do."
+          exit 0
+        fi
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "::error::Shallow checkout — set 'fetch-depth: 0' on actions/checkout." >&2
+          exit 1
+        fi
+        # The ROOT commit, not HEAD: semver-action counts commits in the range
+        # fallbackTag..branch to pick the bump, so anchoring at HEAD gives an
+        # empty range and (with noNewCommitBehavior: current) pins the first
+        # build to 0.0.0 forever.
+        ROOT_SHA="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+        if gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+             -f "ref=refs/tags/${FALLBACK_TAG}" -f "sha=${ROOT_SHA}" >/dev/null 2>&1; then
+          echo "Created ${FALLBACK_TAG} at ${ROOT_SHA}."
+          exit 0
+        fi
+        {
+          echo "### Semver baseline tag missing"
+          echo ""
+          echo "Could not create \`${FALLBACK_TAG}\`. Run:"
+          echo ""
+          echo '```'
+          echo "gh api --method POST repos/${GITHUB_REPOSITORY}/git/refs \\"
+          echo "  -f ref=refs/tags/${FALLBACK_TAG} -f sha=${ROOT_SHA}"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "::warning::Could not create ${FALLBACK_TAG} — see the job summary."
+
+    - name: Compute semver
+      id: semver
+      uses: ietf-tools/semver-action@c90370b2958652d71c06a3484129a4d423a6d8a8 # v1
+      with:
+        token: ${{ github.token }}
+        branch: ${{ github.head_ref || github.ref_name }}
+        fallbackTag: ${{ inputs.fallback_tag }}
+        noVersionBumpBehavior: patch
+        noNewCommitBehavior: current
+
+    - name: Install crane
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/bin"
+        curl -fsSL https://github.com/google/go-containerregistry/releases/download/v0.20.6/go-containerregistry_Linux_arm64.tar.gz \
+          | tar -xz -C "$RUNNER_TEMP/bin" crane
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+    - name: Build and push the immutable tag
+      id: push
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        IMAGE: ${{ inputs.image }}
+        VERSION: ${{ steps.semver.outputs.next }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        BUILD_CONTEXT: ${{ inputs.build_context }}
+        SHA_ARG: ${{ inputs.git_sha_build_arg }}
+      run: |
+        set -euo pipefail
+        args=(-f "$DOCKERFILE" -t "$IMAGE:$VERSION")
+        if [ -n "$SHA_ARG" ]; then
+          args+=(--build-arg "$SHA_ARG=$GITHUB_SHA")
+        fi
+        docker build "${args[@]}" "$BUILD_CONTEXT"
+        # crane, not `docker push`: dockerd refuses plain HTTP to a
+        # non-localhost registry, and reconfiguring ARC's injected dind
+        # sidecar would couple CI to that chart's internals.
+        docker save "$IMAGE:$VERSION" -o "$RUNNER_TEMP/image.tar"
+        crane push --insecure "$RUNNER_TEMP/image.tar" "$REGISTRY/$IMAGE:$VERSION"
+        digest="$(crane digest --insecure "$REGISTRY/$IMAGE:$VERSION")"
+        echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+        echo "Pushed $REGISTRY/$IMAGE:$VERSION @ ${digest}"
+
+    - name: Move the environment pointer tag
+      if: steps.promote_gate.outputs.promote == 'true'
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        IMAGE: ${{ inputs.image }}
+        VERSION: ${{ steps.semver.outputs.next }}
+        POINTER: ${{ inputs.environment }}
+      run: |
+        set -euo pipefail
+        # Retag, never rebuild: the pointer must resolve to the exact digest
+        # that was just verified, not to a fresh build of the same source.
+        crane tag --insecure "$REGISTRY/$IMAGE:$VERSION" "$POINTER"
+        echo "$REGISTRY/$IMAGE:$POINTER -> $VERSION"
+
+    - name: Create the release
+      if: steps.promote_gate.outputs.promote == 'true' && inputs.create_release == 'true'
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      with:
+        tag_name: ${{ steps.semver.outputs.next }}
+        name: ${{ steps.semver.outputs.next }}
+        token: ${{ github.token }}
+
+    - name: Summarize the build
+      if: always()
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        IMAGE: ${{ inputs.image }}
+        VERSION: ${{ steps.semver.outputs.next }}
+        DIGEST: ${{ steps.push.outputs.digest }}
+        POINTER: ${{ inputs.environment }}
+        PROMOTED: ${{ steps.promote_gate.outputs.promote }}
+      run: |
+        {
+          echo "### Build \`${VERSION:-unknown}\`"
+          echo ""
+          echo "- image: \`${REGISTRY}/${IMAGE}:${VERSION}\`"
+          echo "- digest: \`${DIGEST:-unknown}\`"
+          if [ "$PROMOTED" = "true" ]; then
+            echo "- pointer \`${POINTER}\` moved to this digest"
+          else
+            echo "- pointer \`${POINTER}\` NOT moved (branch not in promote_branches)"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
