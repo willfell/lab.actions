@@ -1,10 +1,11 @@
-name: "Lab Deploy — Point an Argo Application at a new image"
+name: "Lab Deploy — Point an Argo Application at a new release"
 description: >
-  Sets image.tag/image.digest as Helm parameters on an Argo CD Application,
-  forces a sync, waits for the Deployment to actually be running that digest
-  with the Application Synced and Healthy, then optionally smoke-checks an
-  HTTP surface. No git write-back: the deployed identity lives as Application
-  parameters, not as a commit.
+  Sets image.tag/image.digest as Helm parameters on an Argo CD Application and,
+  when chart_version is given, pins spec.source.targetRevision alongside them so
+  chart and image move as one unit. Forces a sync, waits for the Deployment to
+  actually be running that digest with the Application Synced and Healthy, then
+  optionally smoke-checks an HTTP surface. No git write-back: the deployed
+  identity lives as Application fields, not as a commit.
 author: "willfell"
 
 inputs:
