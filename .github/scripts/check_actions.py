@@ -1,0 +1,135 @@
+"""Structural validation for every composite action in this repo.
+
+There is no test suite here and nothing else runs before a consumer does. A
+malformed `action.yml` is not caught at author time or at review time -- it is
+caught when someone else's deploy job fails to start, in their repo, on their
+merge. These checks are the cheapest possible stand-in for that: they run in
+seconds and catch the class of mistake that breaks every consumer at once.
+
+Shell bodies are extracted here rather than shellchecked in place because
+`action.yml` is YAML: shellcheck cannot see a `run:` block until something
+pulls it out and gives it a shebang.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: Refs a consuming workflow must never be told to use. `@main` lets an
+#: unrelated push here change how someone else builds and deploys; a floating
+#: major is the same hole with a slower fuse, which is exactly how `v1` went
+#: stale carrying a `gh` dependency the runner image does not have.
+FLOATING_REFS = ("@main", "@master")
+
+
+def _action_files() -> list[Path]:
+    return sorted(REPO_ROOT.glob("*/action.yml"))
+
+
+def _check_schema(path: Path, doc: dict) -> list[str]:
+    problems = []
+    for key in ("name", "description", "runs"):
+        if not doc.get(key):
+            problems.append(f"{path}: missing top-level `{key}`")
+
+    runs = doc.get("runs") or {}
+    if runs.get("using") != "composite":
+        problems.append(f"{path}: runs.using is {runs.get('using')!r}, expected 'composite'")
+
+    for index, step in enumerate(runs.get("steps") or []):
+        where = f"{path}: runs.steps[{index}]"
+        if "run" in step and not step.get("shell"):
+            # A composite step with `run:` and no `shell:` is rejected by the
+            # Actions runner at load time, before any step executes.
+            problems.append(f"{where}: has `run` but no `shell`")
+        if "run" in step and "uses" in step:
+            problems.append(f"{where}: has both `run` and `uses`")
+
+    for name, spec in (doc.get("inputs") or {}).items():
+        if not (spec or {}).get("description"):
+            problems.append(f"{path}: input `{name}` has no description")
+        if (spec or {}).get("required") and "default" in (spec or {}):
+            problems.append(f"{path}: input `{name}` is required but also has a default")
+
+    return problems
+
+
+def _check_no_floating_refs(path: Path) -> list[str]:
+    text = path.read_text()
+    return [
+        f"{path}: pins a floating ref ({ref}) -- consumers must be given an exact tag"
+        for ref in FLOATING_REFS
+        if ref in text
+    ]
+
+
+def _shellcheck(path: Path, doc: dict) -> list[str]:
+    problems = []
+    steps = (doc.get("runs") or {}).get("steps") or []
+    with tempfile.TemporaryDirectory() as tmp:
+        for index, step in enumerate(steps):
+            body = step.get("run")
+            if not body or step.get("shell") != "bash":
+                continue
+            # GitHub expands ${{ ... }} before bash ever sees it. Left in place
+            # it is a syntax error, so substitute a harmless placeholder and
+            # check the shape of the script around it.
+            scrubbed = _strip_expressions(body)
+            script = Path(tmp) / f"step_{index}.sh"
+            script.write_text("#!/usr/bin/env bash\n" + scrubbed)
+            result = subprocess.run(
+                ["shellcheck", "--severity=warning", "--shell=bash", str(script)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                label = step.get("name") or f"steps[{index}]"
+                problems.append(f"{path}: shellcheck failed for {label!r}\n{result.stdout}")
+    return problems
+
+
+def _strip_expressions(body: str) -> str:
+    out = []
+    rest = body
+    while "${{" in rest:
+        head, _, tail = rest.partition("${{")
+        _, _, tail = tail.partition("}}")
+        out.append(head)
+        out.append("GHA_EXPR")
+        rest = tail
+    out.append(rest)
+    return "".join(out)
+
+
+def main() -> int:
+    actions = _action_files()
+    if not actions:
+        print("::error::no */action.yml found -- this check would pass vacuously")
+        return 1
+
+    problems: list[str] = []
+    for path in actions:
+        try:
+            doc = yaml.safe_load(path.read_text())
+        except yaml.YAMLError as exc:
+            problems.append(f"{path}: does not parse as YAML: {exc}")
+            continue
+        problems.extend(_check_schema(path, doc))
+        problems.extend(_check_no_floating_refs(path))
+        problems.extend(_shellcheck(path, doc))
+
+    for problem in problems:
+        print(f"::error::{problem}")
+    print(f"checked {len(actions)} composite action(s); {len(problems)} problem(s)")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
