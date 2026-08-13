@@ -29,6 +29,13 @@ inputs:
       Digest to deploy. Load-bearing: without it a moved pointer tag lets Argo
       report Synced while the running image silently changed.
     required: true
+  chart_version:
+    description: >
+      Chart version to pin at spec.source.targetRevision. Omit to leave the
+      Application's chart revision untouched, which is the behaviour of every
+      caller before v1.2.0.
+    required: false
+    default: ""
   wait_timeout:
     description: "Seconds to wait for convergence"
     required: false
@@ -58,23 +65,28 @@ runs:
         chmod +x "$RUNNER_TEMP/bin/kubectl"
         echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
-    - name: Set the image parameters on the Application
+    - name: Set the chart version and image parameters on the Application
       shell: bash
       env:
         APP: ${{ inputs.app_name }}
         TAG: ${{ inputs.image_tag }}
         DIGEST: ${{ inputs.image_digest }}
+        CHART_VERSION: ${{ inputs.chart_version }}
       run: |
         set -euo pipefail
+        revision=""
+        if [ -n "${CHART_VERSION}" ]; then
+          revision="\"targetRevision\":\"${CHART_VERSION}\","
+        fi
         kubectl -n argocd patch application "$APP" --type merge -p "$(cat <<JSON
-        {"spec":{"source":{"helm":{"parameters":[
+        {"spec":{"source":{${revision}"helm":{"parameters":[
           {"name":"image.tag","value":"${TAG}"},
           {"name":"image.digest","value":"${DIGEST}"}
         ]}}}}
         JSON
         )"
         kubectl -n argocd get application "$APP" \
-          -o jsonpath='{.spec.source.helm.parameters}{"\n"}'
+          -o jsonpath='{.spec.source.targetRevision}{"\n"}{.spec.source.helm.parameters}{"\n"}'
 
     - name: Tell Argo to sync now
       shell: bash
