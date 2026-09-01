@@ -335,12 +335,13 @@ jobs:
 
 ### nextjs-site-deploy
 
-Builds a static-exported Next.js site and ships it: install, restore cached
-optimized images from S3, validate and re-optimize images, build, run an
-optional postbuild step, verify the `out` export exists, sync images with an
-immutable cache header, sync the rest of the app files, and invalidate
-CloudFront. Canonicalizes the deploy.yml the site fleet's repos had copy-pasted
-and drifted -- one step and one invalidation path apart.
+Builds a static-exported Next.js site and ships it: install (with the yarn
+dependency cache restored via `setup-node`), restore cached optimized images
+from S3, validate and re-optimize images, build, run an optional postbuild
+step, verify the `out` export exists, sync images with an immutable cache
+header, sync the rest of the app files, and invalidate CloudFront.
+Canonicalizes the deploy.yml the site fleet's repos had copy-pasted and
+drifted -- one step and one invalidation path apart.
 
 ```yaml
 jobs:
@@ -368,11 +369,19 @@ jobs:
 | `invalidation_paths` | Space-separated CloudFront invalidation path patterns | `/*.html /index.html /_next/* /sitemap*.xml` |
 | `install_command` | Shell command that installs dependencies | `yarn install` |
 | `app_cache_control` | `Cache-Control` header applied to the app-files S3 sync, skipped when empty | `""` |
+| `bucket` | S3 bucket the export is synced to, as a plain string; takes precedence over the `s3_bucket` secret | `""` |
 
 | Secret | Meaning |
 | --- | --- |
-| `s3_bucket` | S3 bucket the export is synced to |
+| `s3_bucket` | S3 bucket the export is synced to; optional, but one of `bucket` or `s3_bucket` must be set |
 | `cloudfront_distribution_id` | CloudFront distribution invalidated after sync |
+
+Values passed through `secrets:` are masked in logs, which turns a bucket
+name into `***` in `aws s3 sync` output even when the name is not sensitive.
+Callers whose bucket name is not a secret should pass it via the `bucket`
+input instead so deploy failures stay legible; `bucket`, when set, takes
+precedence over `s3_bucket`. The workflow's first step fails immediately if
+neither is supplied.
 
 `node_version` defaults to `22`, retiring the fleet's node-18 debt; a caller
 whose build breaks on 22 can override it to `"20"` and then `"18"` while it
@@ -386,8 +395,9 @@ untrusted-caller-writable code, not as data values.
 
 ### nextjs-site-check
 
-Runs the same install, image validation, and build a pull request needs to
-prove a Next.js site still builds, without any of the deploy steps.
+Runs the same install (with the yarn dependency cache restored via
+`setup-node`), image validation, and build a pull request needs to prove a
+Next.js site still builds, without any of the deploy steps.
 
 ```yaml
 jobs:
