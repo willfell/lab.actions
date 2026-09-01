@@ -15,6 +15,7 @@ consuming repository.
 | `lab-tofu-apply` | Guard and apply the reviewed plan file on merge |
 | `lab-tools` | Install the fleet's k8s and registry tooling, arch-aware, onto `PATH` |
 | `lab-gitops-deploy` | Build, push, pin via a kustomize commit-back, sync Argo, verify the served build |
+| `lab-kubeconform` | Validate a kustomize overlay by piping its build through kubeconform |
 
 Consume at an **exact patch-level tag** — never at `main`, and never at a floating
 major:
@@ -253,6 +254,26 @@ from the fresh tip, edit, commit, push. A concurrent pin from another job
 landing between attempts is not a conflict to rebase through -- the next
 attempt just starts over from wherever `main` now points, so it can never
 push a commit based on a base that's gone stale underneath it.
+
+## lab-kubeconform
+
+Pipes a kustomize overlay's rendered manifests through kubeconform.
+Replaces three hand-rolled versions of this same two-command pipeline that
+had drifted onto different tool versions and, on the arm64 consumers, hard-
+coded release-asset URLs for that one architecture.
+
+```yaml
+- uses: willfell/lab.actions/lab-kubeconform@v1.5.0
+  with:
+    kustomize_dir: deploy/k8s
+```
+
+| Input | Meaning | Default |
+| --- | --- | --- |
+| `kustomize_dir` | Directory holding the kustomization to validate | required |
+| `flags` | Flags passed to kubeconform | `-strict -summary` |
+| `kustomize_version` | kustomize release to install | `v5.7.1` |
+| `kubeconform_version` | kubeconform release to install | `v0.7.0` |
 
 ## Reusable workflows
 
