@@ -27,10 +27,34 @@ jobs:
         run: pip install pyyaml
 
       - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck --severity=warning scripts/*.sh
 
       - name: Validate the composite actions
         run: python .github/scripts/check_actions.py
 
-      - name: Lint this repo's own workflows
-        uses: raven-actions/actionlint@v2
+  lint:
+    uses: ./.github/workflows/actionlint.yml
+    permissions:
+      contents: read
+
+  smoke:
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./lab-tools
+        with:
+          tools: kubectl,kustomize,crane,kubeconform,helm
+      - name: Every requested tool runs from the installed PATH
+        run: |
+          set -euo pipefail
+          command -v kubectl kustomize crane kubeconform helm
+          kubectl version --client
+          kustomize version
+          crane version
+          kubeconform -v
+          helm version

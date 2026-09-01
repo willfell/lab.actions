@@ -59,12 +59,10 @@ runs:
   steps:
     - name: Install kubectl
       shell: bash
+      env:
+        KUBECTL_VERSION: v1.35.0
       run: |
-        set -euo pipefail
-        mkdir -p "$RUNNER_TEMP/bin"
-        curl -fsSLo "$RUNNER_TEMP/bin/kubectl" https://dl.k8s.io/release/v1.35.0/bin/linux/arm64/kubectl
-        chmod +x "$RUNNER_TEMP/bin/kubectl"
-        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        "${{ github.action_path }}/../scripts/install-tools.sh" kubectl
 
     - name: Set the chart version and image parameters on the Application
       shell: bash

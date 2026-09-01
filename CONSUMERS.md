@@ -1,0 +1,17 @@
+# Consumers
+
+Every repo pinning this library, by action/workflow and file. Bumping a tag means
+walking this table and opening one PR per repo whose pinned components changed.
+
+| Component | Repo | File | Pin |
+|---|---|---|---|
+| lab-build | egnyte-mcp | .github/workflows/ci.yml | v1.3.0 |
+| lab-deploy | egnyte-mcp | .github/workflows/promote.yml | v1.3.0 |
+| lab-tofu-plan | lab | .github/workflows/tofu-plan.yml | v1.3.0 |
+| lab-tofu-plan | lab | .github/workflows/tofu-drift.yml | v1.3.0 |
+| lab-tofu-apply | lab | .github/workflows/tofu-apply.yml | v1.3.0 |
+| lab-tofu-plan | terraform-global | .github/workflows/tofu-plan.yml | v1.3.0 |
+| lab-tofu-apply | terraform-global | .github/workflows/tofu-apply.yml | v1.3.0 |
+
+Release notes must state which components changed in a tag, so a consumer whose
+components are untouched knows their bump is byte-identical.
