@@ -306,6 +306,9 @@ and drifted -- one step and one invalidation path apart.
 jobs:
   deploy:
     uses: willfell/lab.actions/.github/workflows/nextjs-site-deploy.yml@v1.6.0
+    permissions:
+      id-token: write
+      contents: read
     with:
       role_arn: arn:aws:iam::111111111111:role/site-deploy
       aws_region: us-east-1
