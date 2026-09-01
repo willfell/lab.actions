@@ -47,6 +47,9 @@ inputs:
     description: "Post the plan as a pull request comment. The step summary is always written"
     required: false
     default: "true"
+  workspace:
+    description: OpenTofu workspace selected via TF_WORKSPACE; empty uses the default workspace
+    default: ""
 
 outputs:
   has_changes:
@@ -100,6 +103,8 @@ runs:
     - name: Tofu init
       shell: bash
       working-directory: ${{ inputs.working_directory }}
+      env:
+        TF_WORKSPACE: ${{ inputs.workspace }}
       run: tofu init -input=false
 
     - name: Tofu plan
@@ -108,6 +113,7 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       env:
         WORKDIR: ${{ inputs.working_directory }}
+        TF_WORKSPACE: ${{ inputs.workspace }}
       run: |
         set +e
         tofu plan -input=false -no-color -out=tfplan -detailed-exitcode 2>&1 | tee plan_raw.txt

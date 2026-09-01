@@ -1,0 +1,33 @@
+name: lab-tofu-validate
+description: Check OpenTofu formatting and validate every root under a directory, discovering roots by their backend declaration; needs no cloud credentials
+inputs:
+  working_directory:
+    description: Directory searched for OpenTofu roots
+    default: infra
+  tofu_version:
+    description: OpenTofu release to install
+    default: 1.11.2
+runs:
+  using: composite
+  steps:
+    - uses: opentofu/setup-opentofu@v1
+      with:
+        tofu_version: ${{ inputs.tofu_version }}
+    - name: Check formatting and validate every root
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        tofu -chdir="$WORKING_DIRECTORY" fmt -check -recursive
+        roots="$(find "$WORKING_DIRECTORY" -name '*.tf' -exec grep -lE '^[[:space:]]*backend "' {} + \
+          | while IFS= read -r f; do dirname -- "$f"; done | sort -u || true)"
+        if [ -z "$roots" ]; then
+          echo "::error::no OpenTofu roots discovered under $WORKING_DIRECTORY -- discovery is broken" >&2
+          exit 1
+        fi
+        while read -r root; do
+          echo "== $root"
+          tofu -chdir="$root" init -backend=false -input=false
+          tofu -chdir="$root" validate
+        done <<< "$roots"
