@@ -1,0 +1,211 @@
+name: "Lab Tofu Plan — plan a stack on a pull request"
+description: >
+  Assumes an AWS role by OIDC, runs `tofu init` and `tofu plan -out`, renders the
+  saved plan to JSON, optionally hands that JSON to a caller-supplied guard, and
+  posts the result as a pull request comment. The guard stays in the calling repo
+  on purpose: it is the thing standing between a review and an outage, so it
+  belongs where its own test suite runs, not in a repo that has none. A failing
+  guard still produces the comment, then fails the job -- a reviewer who cannot
+  see why the guard tripped cannot act on it.
+author: "willfell"
+
+inputs:
+  working_directory:
+    description: "Stack directory to plan, relative to the repository root"
+    required: true
+  role_arn:
+    description: "IAM role to assume by OIDC. Scope it to this stack's state object"
+    required: true
+  github_token:
+    description: "Token used to post the plan comment and read pull request labels"
+    required: true
+  aws_region:
+    description: "AWS region for the role assumption and provider"
+    required: false
+    default: "us-west-1"
+  tofu_version:
+    description: "OpenTofu version to install. Empty installs the latest release"
+    required: false
+    default: ""
+  guard_command:
+    description: >
+      Optional shell command vetting the plan before it can be approved. It runs
+      from the repository root with TOFU_PLAN_JSON set to the rendered plan and
+      GUARD_OVERRIDE set to a non-empty value when override_label is present, so
+      a caller can write `--plan "$TOFU_PLAN_JSON" ${GUARD_OVERRIDE:+--force}`
+      and keep its own flag names. Empty runs no guard.
+    required: false
+    default: ""
+  override_label:
+    description: >
+      Pull request label that sets GUARD_OVERRIDE for the guard command. Resolved
+      through the API rather than the event payload so plan and apply agree on
+      what the label was. Empty leaves GUARD_OVERRIDE unset.
+    required: false
+    default: ""
+  comment_on_pr:
+    description: "Post the plan as a pull request comment. The step summary is always written"
+    required: false
+    default: "true"
+
+outputs:
+  has_changes:
+    description: "true when the plan proposes at least one resource change"
+    value: ${{ steps.plan.outputs.has_changes }}
+  plan_json:
+    description: "Path to the rendered plan JSON"
+    value: ${{ steps.plan.outputs.plan_json }}
+  guard_outcome:
+    description: "success, failure, or skipped"
+    value: ${{ steps.guard.outcome }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role_arn }}
+        aws-region: ${{ inputs.aws_region }}
+
+    - name: Setup OpenTofu
+      uses: opentofu/setup-opentofu@v1
+      with:
+        tofu_version: ${{ inputs.tofu_version }}
+
+    - name: Resolve the override label
+      id: override
+      if: inputs.override_label != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        LABEL: ${{ inputs.override_label }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -uo pipefail
+        if [ -n "${PR_NUMBER}" ]; then
+          labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
+            --jq '.[].name' 2>/dev/null || true)"
+        else
+          labels="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '.[].labels[].name' 2>/dev/null || true)"
+        fi
+        echo "labels resolved: ${labels:-<none>}"
+        if printf '%s\n' "$labels" | grep -qxF "$LABEL"; then
+          echo "enabled=1" >> "$GITHUB_OUTPUT"
+        else
+          echo "enabled=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Tofu init
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: tofu init -input=false
+
+    - name: Tofu plan
+      id: plan
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        WORKDIR: ${{ inputs.working_directory }}
+      run: |
+        set +e
+        tofu plan -input=false -no-color -out=tfplan -detailed-exitcode 2>&1 | tee plan_raw.txt
+        code=${PIPESTATUS[0]}
+        set -e
+        if [ "$code" -eq 1 ]; then
+          exit 1
+        fi
+        tofu show -json tfplan > plan.json
+        if [ "$code" -eq 2 ]; then
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+        fi
+        echo "plan_json=${WORKDIR}/plan.json" >> "$GITHUB_OUTPUT"
+
+    - name: Guard the plan
+      id: guard
+      if: inputs.guard_command != ''
+      continue-on-error: true
+      shell: bash
+      env:
+        GUARD_COMMAND: ${{ inputs.guard_command }}
+        TOFU_PLAN_JSON: ${{ steps.plan.outputs.plan_json }}
+        GUARD_OVERRIDE: ${{ steps.override.outputs.enabled }}
+      run: |
+        set -o pipefail
+        bash -c "$GUARD_COMMAND" 2>&1 | tee "${RUNNER_TEMP}/guard.txt"
+
+    - name: Report the plan
+      uses: actions/github-script@v7
+      env:
+        WORKDIR: ${{ inputs.working_directory }}
+        GUARD_OUTCOME: ${{ steps.guard.outcome }}
+        COMMENT_ON_PR: ${{ inputs.comment_on_pr }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const fs = require('fs');
+          const workdir = process.env.WORKDIR;
+          const outcome = process.env.GUARD_OUTCOME;
+
+          const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
+          const raw = read(`${workdir}/plan_raw.txt`);
+          const guard = read(`${process.env.RUNNER_TEMP}/guard.txt`);
+
+          let planJson = { resource_changes: [] };
+          try { planJson = JSON.parse(read(`${workdir}/plan.json`)); } catch {}
+
+          const changes = (planJson.resource_changes || [])
+            .filter(r => r.change && !r.change.actions.every(a => a === 'no-op'))
+            .map(r => {
+              const acts = r.change.actions.filter(a => a !== 'no-op');
+              const action = acts.includes('delete') && acts.includes('create') ? 'replace' :
+                             acts.includes('delete') ? 'destroy' :
+                             acts.includes('create') ? 'create' : 'update';
+              const state = action === 'destroy' ? r.change.before : r.change.after;
+              return { action, address: r.address, id: state?.name || state?.id || '-' };
+            });
+
+          const counts = { create: 0, update: 0, destroy: 0, replace: 0 };
+          changes.forEach(c => counts[c.action]++);
+
+          let body = `### OpenTofu Plan - \`${workdir}/\`\n\n`;
+          if (outcome === 'failure') {
+            body += '> **Guard: FAILED**\n\n';
+          } else if (outcome === 'success') {
+            body += '> Guard: passed\n\n';
+          }
+          if (guard.trim()) {
+            body += '```\n' + guard.trim() + '\n```\n\n';
+          }
+
+          if (changes.length === 0) {
+            body += '**No changes** - infrastructure matches configuration.\n';
+          } else {
+            body += '| Action | Address | Name |\n|---|---|---|\n';
+            changes.forEach(c => { body += `| ${c.action} | \`${c.address}\` | ${c.id} |\n`; });
+            body += `\n**${counts.create} to add, ${counts.update} to change, `;
+            body += `${counts.destroy} to destroy, ${counts.replace} to replace**\n`;
+          }
+
+          body += '\n<details><summary>Show full plan</summary>\n\n```hcl\n' + raw + '\n```\n\n</details>';
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, body + '\n');
+
+          if (process.env.COMMENT_ON_PR === 'true' && context.issue.number) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: Enforce the guard
+      if: steps.guard.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::error::the plan guard failed; see the plan comment for what it objected to"
+        exit 1
