@@ -25,10 +25,11 @@ runs:
     - name: Install requested tools
       shell: bash
       env:
+        TOOLS: ${{ inputs.tools }}
         KUBECTL_VERSION: ${{ inputs.kubectl_version }}
         KUSTOMIZE_VERSION: ${{ inputs.kustomize_version }}
         CRANE_VERSION: ${{ inputs.crane_version }}
         KUBECONFORM_VERSION: ${{ inputs.kubeconform_version }}
         HELM_VERSION: ${{ inputs.helm_version }}
       run: |
-        "${{ github.action_path }}/../scripts/install-tools.sh" "${{ inputs.tools }}"
+        "${{ github.action_path }}/../scripts/install-tools.sh" "$TOOLS"
