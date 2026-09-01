@@ -24,6 +24,12 @@ on:
       invalidation_paths:
         type: string
         default: /*.html /index.html /_next/* /sitemap*.xml
+      install_command:
+        type: string
+        default: yarn install
+      app_cache_control:
+        type: string
+        default: ""
     secrets:
       s3_bucket:
         required: true
@@ -47,7 +53,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-      - run: yarn install
+      - run: ${{ inputs.install_command }}
       - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
         with:
           role-to-assume: ${{ inputs.role_arn }}
@@ -95,10 +101,14 @@ jobs:
       - name: Sync app files to S3
         env:
           S3_BUCKET: ${{ secrets.s3_bucket }}
+          APP_CACHE_CONTROL: ${{ inputs.app_cache_control }}
         run: |
-          aws s3 sync out "s3://${S3_BUCKET}" \
-            --exclude "images/*" \
-            --delete
+          set -euo pipefail
+          args=(out "s3://${S3_BUCKET}" --exclude "images/*" --delete)
+          if [ -n "$APP_CACHE_CONTROL" ]; then
+            args+=(--cache-control "$APP_CACHE_CONTROL")
+          fi
+          aws s3 sync "${args[@]}"
       - name: Invalidate the CloudFront cache
         env:
           DISTRIBUTION_ID: ${{ secrets.cloudfront_distribution_id }}

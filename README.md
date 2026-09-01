@@ -366,6 +366,8 @@ jobs:
 | `postbuild_command` | Shell command run after `yarn build`, skipped when empty | `""` |
 | `build_env` | Newline-separated `KEY=value` pairs exported into the build step | `""` |
 | `invalidation_paths` | Space-separated CloudFront invalidation path patterns | `/*.html /index.html /_next/* /sitemap*.xml` |
+| `install_command` | Shell command that installs dependencies | `yarn install` |
+| `app_cache_control` | `Cache-Control` header applied to the app-files S3 sync, skipped when empty | `""` |
 
 | Secret | Meaning |
 | --- | --- |
@@ -376,10 +378,11 @@ jobs:
 whose build breaks on 22 can override it to `"20"` and then `"18"` while it
 migrates, rather than being blocked on the bump.
 
-`postbuild_command` is a command by contract, the same as any `run:` step --
-it is deliberately interpolated into a shell step, not passed through `env:`.
-Every other input above is data and rides `env:` inside the workflow; treat
-`postbuild_command` as untrusted-caller-writable code, not as a data value.
+`postbuild_command` and `install_command` are commands by contract, the same
+as any `run:` step -- both are deliberately interpolated into a shell step,
+not passed through `env:`. Every other input above is data and rides `env:`
+inside the workflow; treat `postbuild_command` and `install_command` as
+untrusted-caller-writable code, not as data values.
 
 ### nextjs-site-check
 
