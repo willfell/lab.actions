@@ -70,6 +70,15 @@ reviewed it.
     github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+### Selecting a workspace
+
+Both actions take an optional `workspace` input, plumbed as `TF_WORKSPACE` into
+every step that invokes `tofu` -- init, plan, and (on apply) apply itself. Empty,
+the default, means the default workspace, so existing callers are unaffected. A
+repo that selects a workspace per environment must set the same `workspace`
+value on both its plan and apply callers: a workspace honored at plan time and
+dropped at apply time would apply against the wrong state.
+
 ### Guards stay in the calling repo
 
 Neither action ships a policy check. They take a `guard_command` instead, run
