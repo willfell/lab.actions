@@ -1,0 +1,139 @@
+name: "Lab Tofu Apply — apply a reviewed plan on merge"
+description: >
+  Assumes an AWS role by OIDC, plans the stack to a file, optionally guards that
+  plan, then applies the saved plan file rather than re-planning. Applying the
+  file is the point: `tofu apply -auto-approve` computes a fresh plan at apply
+  time, so what lands is not what the guard vetted a moment earlier. The guard
+  runs before the apply and is fatal -- there is no comment to read on a push, so
+  failing loudly is the only signal.
+author: "willfell"
+
+inputs:
+  working_directory:
+    description: "Stack directory to apply, relative to the repository root"
+    required: true
+  role_arn:
+    description: "IAM role to assume by OIDC. Scope it to this stack's state object"
+    required: true
+  aws_region:
+    description: "AWS region for the role assumption and provider"
+    required: false
+    default: "us-west-1"
+  tofu_version:
+    description: "OpenTofu version to install. Empty installs the latest release"
+    required: false
+    default: ""
+  guard_command:
+    description: >
+      Optional shell command vetting the plan before it is applied. It runs from
+      the repository root with TOFU_PLAN_JSON set to the rendered plan and
+      GUARD_OVERRIDE set to a non-empty value when override_label was on the
+      merged pull request. Empty runs no guard.
+    required: false
+    default: ""
+  override_label:
+    description: >
+      Label on the merged pull request that sets GUARD_OVERRIDE. Resolved from
+      the commit's pull request so that merging cannot quietly bypass a guard the
+      plan enforced. Empty leaves GUARD_OVERRIDE unset.
+    required: false
+    default: ""
+  github_token:
+    description: "Token used to resolve the merged pull request's labels"
+    required: false
+    default: ""
+
+outputs:
+  has_changes:
+    description: "true when the plan proposed at least one resource change"
+    value: ${{ steps.plan.outputs.has_changes }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role_arn }}
+        aws-region: ${{ inputs.aws_region }}
+
+    - name: Setup OpenTofu
+      uses: opentofu/setup-opentofu@v1
+      with:
+        tofu_version: ${{ inputs.tofu_version }}
+
+    - name: Resolve the override label
+      id: override
+      if: inputs.override_label != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        LABEL: ${{ inputs.override_label }}
+      run: |
+        set -uo pipefail
+        labels="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+          --jq '.[].labels[].name' 2>/dev/null || true)"
+        echo "labels resolved: ${labels:-<none>}"
+        if printf '%s\n' "$labels" | grep -qxF "$LABEL"; then
+          echo "enabled=1" >> "$GITHUB_OUTPUT"
+        else
+          echo "enabled=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Tofu init
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: tofu init -input=false
+
+    - name: Tofu plan
+      id: plan
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        WORKDIR: ${{ inputs.working_directory }}
+      run: |
+        set +e
+        tofu plan -input=false -no-color -out=tfplan -detailed-exitcode
+        code=$?
+        set -e
+        if [ "$code" -eq 1 ]; then
+          exit 1
+        fi
+        tofu show -json tfplan > plan.json
+        if [ "$code" -eq 2 ]; then
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+        fi
+        echo "plan_json=${WORKDIR}/plan.json" >> "$GITHUB_OUTPUT"
+
+    - name: Guard the plan
+      if: inputs.guard_command != ''
+      shell: bash
+      env:
+        GUARD_COMMAND: ${{ inputs.guard_command }}
+        TOFU_PLAN_JSON: ${{ steps.plan.outputs.plan_json }}
+        GUARD_OVERRIDE: ${{ steps.override.outputs.enabled }}
+      run: |
+        set -euo pipefail
+        bash -c "$GUARD_COMMAND"
+
+    - name: Tofu apply
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: tofu apply -input=false -no-color tfplan
+
+    - name: Summarize the apply
+      if: always()
+      shell: bash
+      env:
+        WORKDIR: ${{ inputs.working_directory }}
+        CHANGED: ${{ steps.plan.outputs.has_changes }}
+        STATUS: ${{ job.status }}
+      run: |
+        {
+          echo "## OpenTofu Apply - \`${WORKDIR}/\`"
+          echo ""
+          echo "- changes planned: \`${CHANGED:-unknown}\`"
+          echo "- result: \`${STATUS}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
