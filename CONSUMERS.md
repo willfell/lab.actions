@@ -7,11 +7,13 @@ walking this table and opening one PR per repo whose pinned components changed.
 |---|---|---|---|
 | lab-build | egnyte-mcp | .github/workflows/ci.yml | v1.3.0 |
 | lab-deploy | egnyte-mcp | .github/workflows/promote.yml | v1.3.0 |
+| lab-tofu-validate | egnyte-mcp | .github/workflows/ci.yml | v1.7.0 |
 | lab-tofu-plan | lab | .github/workflows/tofu-plan.yml | v1.3.0 |
 | lab-tofu-plan | lab | .github/workflows/tofu-drift.yml | v1.3.0 |
 | lab-tofu-apply | lab | .github/workflows/tofu-apply.yml | v1.3.0 |
 | lab-tofu-plan | terraform-global | .github/workflows/tofu-plan.yml | v1.3.0 |
 | lab-tofu-apply | terraform-global | .github/workflows/tofu-apply.yml | v1.3.0 |
+| lab-tofu-validate | terraform-global | .github/workflows/tofu-plan.yml | v1.7.0 |
 | lab-gitops-deploy | finance | .github/workflows/ci.yml | v1.5.0 |
 | lab-kubeconform | finance | .github/workflows/ci.yml | v1.5.0 |
 | lab-gitops-deploy | flight-checker | .github/workflows/ci.yml | v1.5.0 |

@@ -13,6 +13,7 @@ consuming repository.
 | `lab-deploy` | Point an Argo CD Application at a new release and wait for it to converge |
 | `lab-tofu-plan` | Plan an OpenTofu stack on a pull request, guard it, and comment the result |
 | `lab-tofu-apply` | Guard and apply the reviewed plan file on merge |
+| `lab-tofu-validate` | Check formatting and validate every OpenTofu root under a directory, no credentials needed |
 | `lab-tools` | Install the fleet's k8s and registry tooling, arch-aware, onto `PATH` |
 | `lab-gitops-deploy` | Build, push, pin via a kustomize commit-back, sync Argo, verify the served build |
 | `lab-kubeconform` | Validate a kustomize overlay by piping its build through kubeconform |
@@ -111,6 +112,36 @@ Check out the repository and install whatever `guard_command` needs before
 calling either action; neither does its own checkout or language setup. The
 override-label step shells out to `gh`, which is present on GitHub-hosted runners
 but not on this homelab's self-hosted image -- omit `override_label` there.
+
+## lab-tofu-validate
+
+Checks OpenTofu formatting and validates every root under a directory, without
+assuming any cloud role or reading any state. It installs OpenTofu itself, so a
+caller drops its own setup step.
+
+```yaml
+- uses: willfell/lab.actions/lab-tofu-validate@v1.7.0
+  with:
+    working_directory: infra
+```
+
+| Input | Meaning | Default |
+| --- | --- | --- |
+| `working_directory` | Directory searched for OpenTofu roots | `infra` |
+| `tofu_version` | OpenTofu release to install | `1.11.2` |
+
+### Root discovery
+
+A root is any directory whose `*.tf` files declare an anchored `backend "`
+block. Discovery walks `working_directory` for that pattern rather than
+requiring a caller to list roots explicitly, so `terraform-global`'s
+`backend.tf` layout and `egnyte-mcp`'s `versions.tf` layout are both found the
+same way. Discovering zero roots is a loud failure, not a vacuous pass -- a
+directory that quietly stopped matching the pattern would otherwise let this
+check pass while validating nothing.
+
+Each discovered root is initialized with `-backend=false`, so the check needs
+no cloud credentials and can gate any pull request cheaply.
 
 ## lab-tools
 
