@@ -70,6 +70,27 @@ def _check_no_floating_refs(path: Path) -> list[str]:
     ]
 
 
+def _workflow_files() -> list[Path]:
+    return sorted((REPO_ROOT / ".github/workflows").glob("*.yml"))
+
+
+def _is_reusable(doc: dict) -> bool:
+    # PyYAML resolves an unquoted `on:` key to True, so triggers live under
+    # doc[True] rather than doc["on"].
+    triggers = doc.get("on") or doc.get(True) or {}
+    return isinstance(triggers, dict) and "workflow_call" in triggers
+
+
+def _check_reusable_workflow(path: Path, doc: dict) -> list[str]:
+    problems = []
+    if not doc.get("name"):
+        problems.append(f"{path}: reusable workflow missing top-level `name`")
+    if not doc.get("jobs"):
+        problems.append(f"{path}: reusable workflow has no `jobs`")
+    problems.extend(_check_no_floating_refs(path))
+    return problems
+
+
 def _shellcheck(path: Path, doc: dict) -> list[str]:
     problems = []
     steps = (doc.get("runs") or {}).get("steps") or []
@@ -125,9 +146,28 @@ def main() -> int:
         problems.extend(_check_no_floating_refs(path))
         problems.extend(_shellcheck(path, doc))
 
+    reusable = []
+    for path in _workflow_files():
+        try:
+            doc = yaml.safe_load(path.read_text())
+        except yaml.YAMLError as exc:
+            problems.append(f"{path}: does not parse as YAML: {exc}")
+            continue
+        if _is_reusable(doc):
+            reusable.append(path)
+            problems.extend(_check_reusable_workflow(path, doc))
+    if not reusable:
+        problems.append(
+            ".github/workflows: no reusable workflow found -- the reusable-workflow "
+            "checks would pass vacuously"
+        )
+
     for problem in problems:
         print(f"::error::{problem}")
-    print(f"checked {len(actions)} composite action(s); {len(problems)} problem(s)")
+    print(
+        f"checked {len(actions)} composite action(s) and {len(reusable)} reusable "
+        f"workflow(s); {len(problems)} problem(s)"
+    )
     return 1 if problems else 0
 
 

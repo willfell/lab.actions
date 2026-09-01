@@ -32,5 +32,7 @@ jobs:
       - name: Validate the composite actions
         run: python .github/scripts/check_actions.py
 
-      - name: Lint this repo's own workflows
-        uses: raven-actions/actionlint@v2
+  lint:
+    uses: ./.github/workflows/actionlint.yml
+    permissions:
+      contents: read
