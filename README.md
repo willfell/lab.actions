@@ -13,6 +13,7 @@ consuming repository.
 | `lab-deploy` | Point an Argo CD Application at a new release and wait for it to converge |
 | `lab-tofu-plan` | Plan an OpenTofu stack on a pull request, guard it, and comment the result |
 | `lab-tofu-apply` | Guard and apply the reviewed plan file on merge |
+| `lab-tools` | Install the fleet's k8s and registry tooling, arch-aware, onto `PATH` |
 
 Consume at an **exact patch-level tag** — never at `main`, and never at a floating
 major:
@@ -32,7 +33,11 @@ point: an unreviewed change to a composite cannot reach anyone's CI, and cannot
 silently fail to reach it either.
 
 All actions share one tag. A release touching only `lab-deploy` still moves
-`lab-build`'s pin to the same ref, pointing at byte-identical code.
+`lab-build`'s pin to the same ref, pointing at byte-identical code. Reusable
+workflows (below) ride the same repo-wide exact tags.
+
+`CONSUMERS.md` tracks every pinned component, repo, and file. Bumping a tag means
+walking that table and opening one PR per affected consumer.
 
 ## Releasing
 
@@ -104,3 +109,49 @@ Check out the repository and install whatever `guard_command` needs before
 calling either action; neither does its own checkout or language setup. The
 override-label step shells out to `gh`, which is present on GitHub-hosted runners
 but not on this homelab's self-hosted image -- omit `override_label` there.
+
+## lab-tools
+
+Installs the fleet's k8s and registry tooling -- `kubectl`, `kustomize`, `crane`,
+`kubeconform`, `helm` -- to `$RUNNER_TEMP/bin` and appends it to `GITHUB_PATH`, so
+every subsequent step in the job finds them on `PATH`. It maps `uname -m` to each
+tool's release-asset arch naming, so the same call works unmodified on
+GitHub-hosted amd64 runners and this homelab's arm64 self-hosted runners.
+
+```yaml
+- uses: willfell/lab.actions/lab-tools@v1.4.0
+  with:
+    tools: kubectl,kustomize,crane,kubeconform
+```
+
+| Input | Meaning | Default |
+| --- | --- | --- |
+| `tools` | Comma-separated subset of `kubectl,kustomize,crane,kubeconform,helm` | required |
+| `kubectl_version` | kubectl release installed when `kubectl` is requested | `v1.35.0` |
+| `kustomize_version` | kustomize release installed when `kustomize` is requested | `v5.7.1` |
+| `crane_version` | go-containerregistry release installed when `crane` is requested | `v0.20.6` |
+| `kubeconform_version` | kubeconform release installed when `kubeconform` is requested | `v0.7.0` |
+| `helm_version` | helm release installed when `helm` is requested; empty installs the latest | `""` |
+
+This repo's CI runs the smoke matrix on `ubuntu-latest` (amd64) and
+`ubuntu-24.04-arm` (arm64) on every push and pull request, installing all five
+tools and executing each one, so the arch mapping above is enforced by a real
+job rather than trusted.
+
+## Reusable workflows
+
+Reusable workflows ride the same repo-wide exact tags as the composites above --
+consume at an exact patch-level tag, never `@main` or a floating major.
+
+### actionlint
+
+Runs [`raven-actions/actionlint`](https://github.com/raven-actions/actionlint)
+against the caller's own workflows. No inputs.
+
+```yaml
+jobs:
+  lint:
+    uses: willfell/lab.actions/.github/workflows/actionlint.yml@v1.4.0
+    permissions:
+      contents: read
+```
