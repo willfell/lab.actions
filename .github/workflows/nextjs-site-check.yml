@@ -1,0 +1,29 @@
+name: nextjs-site-check
+
+on:
+  workflow_call:
+    inputs:
+      app_dir:
+        type: string
+        default: app
+      node_version:
+        type: string
+        default: "22"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.app_dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+      - run: yarn install
+      - run: yarn images:validate
+      - run: yarn build
