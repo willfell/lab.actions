@@ -292,3 +292,71 @@ jobs:
     permissions:
       contents: read
 ```
+
+### nextjs-site-deploy
+
+Builds a static-exported Next.js site and ships it: install, restore cached
+optimized images from S3, validate and re-optimize images, build, run an
+optional postbuild step, verify the `out` export exists, sync images with an
+immutable cache header, sync the rest of the app files, and invalidate
+CloudFront. Canonicalizes the deploy.yml the site fleet's repos had copy-pasted
+and drifted -- one step and one invalidation path apart.
+
+```yaml
+jobs:
+  deploy:
+    uses: willfell/lab.actions/.github/workflows/nextjs-site-deploy.yml@v1.6.0
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      role_arn: arn:aws:iam::111111111111:role/site-deploy
+      aws_region: us-east-1
+    secrets:
+      s3_bucket: ${{ secrets.S3_BUCKET_NAME }}
+      cloudfront_distribution_id: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+```
+
+| Input | Meaning | Default |
+| --- | --- | --- |
+| `app_dir` | Directory holding the Next.js app | `app` |
+| `node_version` | Node release installed before `yarn install` | `22` |
+| `role_arn` | OIDC role assumed for the AWS credentials used to deploy | required |
+| `aws_region` | AWS region passed to `configure-aws-credentials` | required |
+| `postbuild_command` | Shell command run after `yarn build`, skipped when empty | `""` |
+| `build_env` | Newline-separated `KEY=value` pairs exported into the build step | `""` |
+| `invalidation_paths` | Space-separated CloudFront invalidation path patterns | `/*.html /index.html /_next/* /sitemap*.xml` |
+
+| Secret | Meaning |
+| --- | --- |
+| `s3_bucket` | S3 bucket the export is synced to |
+| `cloudfront_distribution_id` | CloudFront distribution invalidated after sync |
+
+`node_version` defaults to `22`, retiring the fleet's node-18 debt; a caller
+whose build breaks on 22 can override it to `"20"` and then `"18"` while it
+migrates, rather than being blocked on the bump.
+
+`postbuild_command` is a command by contract, the same as any `run:` step --
+it is deliberately interpolated into a shell step, not passed through `env:`.
+Every other input above is data and rides `env:` inside the workflow; treat
+`postbuild_command` as untrusted-caller-writable code, not as a data value.
+
+### nextjs-site-check
+
+Runs the same install, image validation, and build a pull request needs to
+prove a Next.js site still builds, without any of the deploy steps.
+
+```yaml
+jobs:
+  check:
+    uses: willfell/lab.actions/.github/workflows/nextjs-site-check.yml@v1.6.0
+```
+
+| Input | Meaning | Default |
+| --- | --- | --- |
+| `app_dir` | Directory holding the Next.js app | `app` |
+| `node_version` | Node release installed before `yarn install` | `22` |
+
+`node_version` defaults to `22` with the same fallback ladder (`20`, then
+`18`) as `nextjs-site-deploy` -- a caller's green check on the default is the
+acceptance test for the node-22 bump.

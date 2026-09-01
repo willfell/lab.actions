@@ -1,0 +1,111 @@
+name: nextjs-site-deploy
+
+on:
+  workflow_call:
+    inputs:
+      app_dir:
+        type: string
+        default: app
+      node_version:
+        type: string
+        default: "22"
+      role_arn:
+        type: string
+        required: true
+      aws_region:
+        type: string
+        required: true
+      postbuild_command:
+        type: string
+        default: ""
+      build_env:
+        type: string
+        default: ""
+      invalidation_paths:
+        type: string
+        default: /*.html /index.html /_next/* /sitemap*.xml
+    secrets:
+      s3_bucket:
+        required: true
+      cloudfront_distribution_id:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.app_dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+      - run: yarn install
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          role-to-assume: ${{ inputs.role_arn }}
+          aws-region: ${{ inputs.aws_region }}
+      - name: Download cached optimized images from S3
+        continue-on-error: true
+        env:
+          S3_BUCKET: ${{ secrets.s3_bucket }}
+        run: |
+          aws s3 sync "s3://${S3_BUCKET}/images" ./public/images \
+            --exclude "*" \
+            --include "*.webp" \
+            --include "*.avif" \
+            --include ".image-manifest.json" \
+            --only-show-errors || echo "no cached images found"
+          find ./public/images \( -name "*.webp" -o -name "*.avif" \) 2>/dev/null | wc -l
+      - run: yarn images:validate
+      - run: yarn images:optimize
+      - name: Build
+        env:
+          BUILD_ENV: ${{ inputs.build_env }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            [ -n "$line" ] && export "${line?}"
+          done <<<"$BUILD_ENV"
+          yarn build
+      - name: Postbuild
+        if: inputs.postbuild_command != ''
+        run: ${{ inputs.postbuild_command }}
+      - name: Verify the export directory exists
+        run: |
+          set -euo pipefail
+          if [ ! -d out ]; then
+            echo "export directory 'out' not found; the build or export failed" >&2
+            exit 1
+          fi
+          ls -la out
+      - name: Sync images to S3 with immutable cache headers
+        env:
+          S3_BUCKET: ${{ secrets.s3_bucket }}
+        run: |
+          aws s3 sync out/images "s3://${S3_BUCKET}/images" \
+            --cache-control "public, max-age=31536000, immutable"
+      - name: Sync app files to S3
+        env:
+          S3_BUCKET: ${{ secrets.s3_bucket }}
+        run: |
+          aws s3 sync out "s3://${S3_BUCKET}" \
+            --exclude "images/*" \
+            --delete
+      - name: Invalidate the CloudFront cache
+        env:
+          DISTRIBUTION_ID: ${{ secrets.cloudfront_distribution_id }}
+          INVALIDATION_PATHS: ${{ inputs.invalidation_paths }}
+        run: |
+          set -euo pipefail
+          read -ra paths <<<"$INVALIDATION_PATHS"
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "${paths[@]}"
