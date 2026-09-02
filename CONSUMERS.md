@@ -20,6 +20,9 @@ walking this table and opening one PR per repo whose pinned components changed.
 | lab-kubeconform | wac | .github/workflows/ci.yml | v1.5.0 |
 | lab-tools | wac.vaults | .github/workflows/ci.yml | v1.5.0 |
 | actionlint | wac.vaults | .github/workflows/ci.yml | v1.5.0 |
+| lab-gitops-deploy | travel | .github/workflows/ci.yml | v1.5.0 |
+| lab-kubeconform | travel | .github/workflows/ci.yml | v1.5.0 |
+| actionlint | travel | .github/workflows/ci.yml | v1.5.0 |
 | nextjs-site-deploy | fellhoelter-consulting | .github/workflows/deploy.yml | v1.6.0 |
 | nextjs-site-check | fellhoelter-consulting | .github/workflows/pr.yml | v1.6.0 |
 | nextjs-site-deploy | will-fell | .github/workflows/deploy.yml | v1.6.0 |
