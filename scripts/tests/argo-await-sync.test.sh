@@ -21,12 +21,14 @@ setup() {
   mkdir -p "$workdir/bin"
   printf '0' >"$workdir/reads"
   : >"$workdir/patches"
+  : >"$workdir/patch_args"
   cat >"$workdir/bin/kubectl" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 for arg in "$@"; do
   if [ "$arg" = "patch" ]; then
     echo patched >>"$FAKE_STATE/patches"
+    printf '%s\n' "$*" >>"$FAKE_STATE/patch_args"
     exit 0
   fi
 done
@@ -93,6 +95,29 @@ run_subject || status=$?
 check "exits 0 once its own operation finishes" 0 "$status"
 check "kept polling past the pre-adoption snapshot" 4 "$(reads)"
 contains "names the hook it verified" "with its PreSync hook"
+teardown
+
+echo "the request replaces the operation rather than merging into it"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded "" true "$OLD" t2 t2 "" ":Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Succeeded,:Synced,"
+status=0
+run_subject || status=$?
+check "exits 0" 0 "$status"
+if grep -q -- "--type json" "$workdir/patch_args" && grep -qF '"op":"add","path":"/operation"' "$workdir/patch_args"; then
+  echo "  ok: patches with a JSON Patch add on /operation"
+else
+  echo "  FAIL: patch is not a wholesale replace of /operation"
+  sed 's/^/      /' "$workdir/patch_args"
+  failures=$((failures + 1))
+fi
+if grep -q -- "--type merge" "$workdir/patch_args"; then
+  echo "  FAIL: still uses a merge patch, which fuses with an automated sync"
+  failures=$((failures + 1))
+else
+  echo "  ok: never uses a merge patch"
+fi
 teardown
 
 echo "an operation fused with an automated sync is not ours"

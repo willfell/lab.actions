@@ -257,14 +257,17 @@ Job could possibly have run.
 before patching and requires the observed one to differ, so the previous
 deploy's `Succeeded` is never mistaken for this one's.
 
-**The request never lands on an occupied slot.** `kubectl patch --type merge`
-merges maps, so patching `operation.initiatedBy.username` while an automated
-sync already holds `.operation` fuses the two into
-`initiatedBy: {automated: true, username: ci}`. Argo runs that as the automated
-sync it already was -- reconciling only the drifted resources, skipping hooks --
-while a check for `username == ci` happily accepts it. So the wait requests a
-sync only when the slot is free, and treats any operation carrying
-`automated: true` as not its own however it is labelled.
+**The request replaces the operation, it does not merge into one.**
+`kubectl patch --type merge` merges maps, so patching
+`operation.initiatedBy.username` while an automated sync holds `.operation`
+fuses the two into `initiatedBy: {automated: true, username: ci}`. Argo runs
+that as the automated sync it already was -- reconciling only the drifted
+resources, skipping hooks -- while a check for `username == ci` happily accepts
+it. Checking that the slot is free before patching is not enough: the slot can
+be claimed in the moment between the read and the write, which is exactly what
+happened to flight-checker. The request is therefore a JSON Patch `add` on
+`/operation`, which replaces the whole object atomically, and any operation
+carrying `automated: true` is treated as not ours however it is labelled.
 
 Set `require_hook: PreSync` on any app whose manifests carry a migration Job.
 It makes the deploy fail when an operation converges without running the hook,
