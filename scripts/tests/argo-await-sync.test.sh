@@ -137,7 +137,7 @@ snapshot Succeeded ci true "$NEW" t3 t4 "" ":Synced,"
 status=0
 run_subject || status=$?
 check "exits 1" 1 "$status"
-contains "names the missing hook" "succeeded without a PreSync hook"
+contains "names the missing hook" "ran no successful PreSync hook"
 teardown
 
 echo "the wait never patches an occupied operation slot"
@@ -173,7 +173,26 @@ snapshot Succeeded ci "" "$NEW" t3 t4 "" ":Synced,"
 status=0
 run_subject || status=$?
 check "exits 1" 1 "$status"
-contains "names the missing hook" "succeeded without a PreSync hook"
+contains "names the missing hook" "ran no successful PreSync hook"
+teardown
+
+echo "an operation whose hook is still running counts as having run it"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Running,:Running,"
+status=0
+run_subject || status=$?
+check "exits 0" 0 "$status"
+teardown
+
+echo "an operation whose hook failed is rejected"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Failed,:Synced,"
+status=0
+run_subject || status=$?
+check "exits 1" 1 "$status"
+contains "names the hook" "ran no successful PreSync hook"
 teardown
 
 echo "a failed operation fails the deploy immediately"

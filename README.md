@@ -278,6 +278,13 @@ Set `require_hook: PreSync` on any app whose manifests carry a migration Job.
 It makes the deploy fail when an operation converges without running the hook,
 which is the difference between a schema that migrated and one that did not.
 
+The test is that the hook appears in the completed operation's `syncResult`,
+not that it reached `Succeeded` there. The syncs this wait exists to reject
+carry no entry for the hook at all -- their `syncResult` is the drifted
+workloads and nothing else. An operation can also finish while the hook it
+created is still `Running`, and that is a sync that did include the migration,
+so only an outright hook failure is treated as fatal.
+
 ### The registry split
 
 `registry.network` collides with a real public TLD (`.network`), so the

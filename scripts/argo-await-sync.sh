@@ -65,9 +65,15 @@ identity_of() {
   printf '%s' "$1" | cut -d'|' -f1-6
 }
 
+# The hookless syncs this wait exists to reject carry no entry for the hook at
+# all -- their syncResult is the drifted workloads and nothing else. An
+# operation can also finish while the hook it created is still Running, which
+# is a sync that did include the migration, so presence is the test and only an
+# outright hook failure is fatal.
 hook_ran() {
   case ",$1" in
-    *",$REQUIRE_HOOK:Succeeded,"*) return 0 ;;
+    *",$REQUIRE_HOOK:Failed,"* | *",$REQUIRE_HOOK:Error,"*) return 1 ;;
+    *",$REQUIRE_HOOK:"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -89,7 +95,7 @@ while :; do
         Succeeded)
           if [ -n "$finished" ]; then
             if [ -n "$REQUIRE_HOOK" ] && ! hook_ran "$hooks"; then
-              echo "the $USERNAME-initiated sync of $REVISION succeeded without a $REQUIRE_HOOK hook" >&2
+              echo "the $USERNAME-initiated sync of $REVISION ran no successful $REQUIRE_HOOK hook" >&2
               echo "syncResult hooks: ${hooks:-none}" >&2
               exit 1
             fi
