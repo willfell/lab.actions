@@ -218,9 +218,48 @@ finance, flight-checker, and wac each carried and drifted independently.
 | `health_url` | In-cluster health endpoint returning `{sha,...}`; empty skips verification | `""` |
 | `health_expect_db_ok` | Also assert the health payload reports `db == ok` | `"true"` |
 | `wait_timeout` | Seconds to wait on each Argo condition | `"300"` |
+| `require_hook` | Hook type (e.g. `PreSync`) that must have run inside the sync operation; empty skips the check | `""` |
 | `kubectl_version` / `kustomize_version` / `crane_version` | Tool releases for the deploy and pin steps | `v1.35.0` / `v5.7.1` / `v0.20.6` |
 
 Output: `bump_sha`, the `main`-branch commit carrying the image pin.
+
+### Why the sync wait asserts the operation, not the end state
+
+An Argo `Application` with `syncPolicy.automated.selfHeal` can start its own
+sync between the pin landing on `main` and this action's patch taking effect.
+That automated sync reconciles only the drifted `Deployment` and runs **no
+hooks**, so a `PreSync` migration Job never executes -- yet it still leaves the
+Application at the pinned revision, `Synced`, and `Healthy`. A wait built on
+those three flags passes, the rollout succeeds, and a `/api/health` probe that
+only does `select 1` confirms the new image is serving. The result is a fully
+green deploy against an unmigrated schema. This happened three times in
+production before the wait was written to catch it.
+
+So the wait does not ask "is the app synced and healthy at my revision". It
+asks "did the operation *I* requested run to completion", by polling
+`.status.operationState` until it shows a `Succeeded` operation whose
+`initiatedBy.username` is `ci` and whose `sync.revision` is the pin. If the
+operation slot is free and the recorded operation is not ours -- an automated
+sync displaced the request -- it re-requests rather than waiting on an
+operation that will never be ours.
+
+Two details make that assertion trustworthy:
+
+**The read is atomic.** Every field the decision depends on comes out of one
+`kubectl get`. Reading them with separate calls lets a `Succeeded` phase left
+over from the *previous* operation pair with the revision of the one just
+requested -- a combination that never existed in any single state of the
+resource. That torn read is not a rare race: it reproduced on four consecutive
+deploys, each passing the wait ~5 seconds after the patch, before the migration
+Job could possibly have run.
+
+**A stale success cannot satisfy it.** The wait records the operation identity
+before patching and requires the observed one to differ, so the previous
+deploy's `Succeeded` is never mistaken for this one's.
+
+Set `require_hook: PreSync` on any app whose manifests carry a migration Job.
+It makes the deploy fail when an operation converges without running the hook,
+which is the difference between a schema that migrated and one that did not.
 
 ### The registry split
 

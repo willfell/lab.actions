@@ -29,10 +29,13 @@ jobs:
       - name: Install shellcheck
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck --severity=warning scripts/*.sh
+          shellcheck --severity=warning scripts/*.sh scripts/tests/*.sh
 
       - name: Validate the composite actions
         run: python .github/scripts/check_actions.py
+
+      - name: Run the script tests
+        run: bash scripts/tests/argo-await-sync.test.sh
 
   lint:
     uses: ./.github/workflows/actionlint.yml
