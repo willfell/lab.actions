@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Request an Argo CD sync of a pinned revision and block until the operation
-# this script initiated is the one that completed. The request replaces the
-# operation object wholesale and is only made when the slot looks free, so it
-# can never fuse with an automated sync that would then run without hooks.
+# this script initiated is the one that completed, and -- when REQUIRE_HOOK is
+# set -- that the hook proving the migration ran is in its syncResult. Argo's
+# own auto-sync can stamp automated: true onto the operation carrying our
+# username, so the hook, not the initiator, is what makes the result
+# trustworthy.
 #
 # Usage: argo-await-sync.sh   with everything supplied via env:
 #   ARGO_APP        Application name (required)
@@ -81,7 +83,7 @@ deadline=$(($(date +%s) + TIMEOUT))
 while :; do
   if snap=$(snapshot); then
     IFS='|' read -r phase user automated revision started finished slot hooks <<<"$snap"
-    if [ "$user" = "$USERNAME" ] && [ "$automated" != "true" ] && [ "$revision" = "$REVISION" ] &&
+    if [ "$user" = "$USERNAME" ] && [ "$revision" = "$REVISION" ] &&
       [ "$(identity_of "$snap")" != "$baseline_identity" ]; then
       case "$phase" in
         Succeeded)

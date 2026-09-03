@@ -257,17 +257,22 @@ Job could possibly have run.
 before patching and requires the observed one to differ, so the previous
 deploy's `Succeeded` is never mistaken for this one's.
 
-**The request replaces the operation, it does not merge into one.**
-`kubectl patch --type merge` merges maps, so patching
-`operation.initiatedBy.username` while an automated sync holds `.operation`
-fuses the two into `initiatedBy: {automated: true, username: ci}`. Argo runs
-that as the automated sync it already was -- reconciling only the drifted
-resources, skipping hooks -- while a check for `username == ci` happily accepts
-it. Checking that the slot is free before patching is not enough: the slot can
-be claimed in the moment between the read and the write, which is exactly what
-happened to flight-checker. The request is therefore a JSON Patch `add` on
-`/operation`, which replaces the whole object atomically, and any operation
-carrying `automated: true` is treated as not ours however it is labelled.
+**The request replaces the operation, it does not merge into one.** The sync is
+requested with a JSON Patch `add` on `/operation`, which replaces the whole
+object, and only when the slot looks free, so a sync that is genuinely
+mid-flight is not displaced.
+
+**The hook, not the initiator, is what makes the result trustworthy.** Argo's
+own auto-sync can stamp `automated: true` onto the very operation carrying this
+action's username, producing `initiatedBy: {automated: true, username: ci}`. No
+client-side patch prevents that -- the stamping happens on Argo's side, after
+the write. Fused operations usually do run hooks, so rejecting them outright
+only makes deploys unachievable on an app whose sync slot is contended. What
+the wait requires instead is that the completed operation carries the pinned
+revision, is not the one observed before patching, and -- when `require_hook`
+is set -- ran that hook to `Succeeded`. All three production incidents were
+syncs with no hook at all, which that catches regardless of who is recorded as
+having started them.
 
 Set `require_hook: PreSync` on any app whose manifests carry a migration Job.
 It makes the deploy fail when an operation converges without running the hook,

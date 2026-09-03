@@ -120,16 +120,24 @@ else
 fi
 teardown
 
-echo "an operation fused with an automated sync is not ours"
+echo "an operation fused with an automated sync still counts when its hook ran"
 setup
 snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
-snapshot Succeeded ci true "$NEW" t3 t3 "" ":Synced,"
-snapshot Running ci "" "$NEW" t4 "" "$NEW" ""
-snapshot Succeeded ci "" "$NEW" t4 t5 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci true "$NEW" t3 t4 "" "PreSync:Succeeded,:Synced,"
 status=0
 run_subject || status=$?
-check "exits 0 only after a purely ci operation runs" 0 "$status"
-contains "reports the fused operation" "automated=true"
+check "exits 0" 0 "$status"
+contains "names the hook it verified" "with its PreSync hook"
+teardown
+
+echo "a fused operation that skipped the hook is still rejected"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci true "$NEW" t3 t4 "" ":Synced,"
+status=0
+run_subject || status=$?
+check "exits 1" 1 "$status"
+contains "names the missing hook" "succeeded without a PreSync hook"
 teardown
 
 echo "the wait never patches an occupied operation slot"
