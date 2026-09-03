@@ -175,7 +175,18 @@ runs:
       run: |
         set -euo pipefail
         field() {
-          kubectl -n argocd get application "$ARGO_APP" -o jsonpath="{$1}"
+          local attempt rc
+          for attempt in 1 2 3; do
+            kubectl -n argocd get application "$ARGO_APP" -o jsonpath="{$1}"
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              return 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep 2
+            fi
+          done
+          return "$rc"
         }
         request_sync() {
           kubectl -n argocd patch application "$ARGO_APP" --type merge -p \
@@ -187,6 +198,7 @@ runs:
           phase=$(field '.status.operationState.phase')
           op_user=$(field '.status.operationState.operation.initiatedBy.username')
           op_rev=$(field '.status.operationState.operation.sync.revision')
+          op_slot=$(field '.operation')
           if [ "$op_user" = "ci" ] && [ "$op_rev" = "$BUMP_SHA" ]; then
             case "$phase" in
               Succeeded)
@@ -198,7 +210,7 @@ runs:
                 exit 1
                 ;;
             esac
-          elif [ -z "$(field '.operation')" ]; then
+          elif [ -z "$op_slot" ]; then
             case "${phase:-none}" in
               Succeeded|Failed|Error|none)
                 echo "operation slot held a non-ci sync (initiatedBy=${op_user:-empty} revision=${op_rev:-none}); re-requesting"
