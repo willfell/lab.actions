@@ -257,6 +257,15 @@ Job could possibly have run.
 before patching and requires the observed one to differ, so the previous
 deploy's `Succeeded` is never mistaken for this one's.
 
+**The request never lands on an occupied slot.** `kubectl patch --type merge`
+merges maps, so patching `operation.initiatedBy.username` while an automated
+sync already holds `.operation` fuses the two into
+`initiatedBy: {automated: true, username: ci}`. Argo runs that as the automated
+sync it already was -- reconciling only the drifted resources, skipping hooks --
+while a check for `username == ci` happily accepts it. So the wait requests a
+sync only when the slot is free, and treats any operation carrying
+`automated: true` as not its own however it is labelled.
+
 Set `require_hook: PreSync` on any app whose manifests carry a migration Job.
 It makes the deploy fail when an operation converges without running the hook,
 which is the difference between a schema that migrated and one that did not.

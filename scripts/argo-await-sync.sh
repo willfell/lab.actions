@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Request an Argo CD sync of a pinned revision and block until the operation
-# this script initiated is the one that completed.
+# this script initiated is the one that completed. The request is only made
+# when the operation slot is free: a merge patch onto an occupied slot fuses
+# with the automated sync holding it, which then runs without hooks.
 #
 # Usage: argo-await-sync.sh   with everything supplied via env:
 #   ARGO_APP        Application name (required)
@@ -26,6 +28,7 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 # the revision of the one just requested -- a state that never existed.
 TEMPLATE='{.status.operationState.phase}'
 TEMPLATE="$TEMPLATE|{.status.operationState.operation.initiatedBy.username}"
+TEMPLATE="$TEMPLATE|{.status.operationState.operation.initiatedBy.automated}"
 TEMPLATE="$TEMPLATE|{.status.operationState.operation.sync.revision}"
 TEMPLATE="$TEMPLATE|{.status.operationState.startedAt}"
 TEMPLATE="$TEMPLATE|{.status.operationState.finishedAt}"
@@ -52,7 +55,7 @@ request_sync() {
 }
 
 identity_of() {
-  printf '%s' "$1" | cut -d'|' -f1-5
+  printf '%s' "$1" | cut -d'|' -f1-6
 }
 
 hook_ran() {
@@ -68,13 +71,12 @@ if ! baseline=$(snapshot); then
 fi
 baseline_identity=$(identity_of "$baseline")
 
-request_sync
 deadline=$(($(date +%s) + TIMEOUT))
 
 while :; do
   if snap=$(snapshot); then
-    IFS='|' read -r phase user revision started finished slot hooks <<<"$snap"
-    if [ "$user" = "$USERNAME" ] && [ "$revision" = "$REVISION" ] &&
+    IFS='|' read -r phase user automated revision started finished slot hooks <<<"$snap"
+    if [ "$user" = "$USERNAME" ] && [ "$automated" != "true" ] && [ "$revision" = "$REVISION" ] &&
       [ "$(identity_of "$snap")" != "$baseline_identity" ]; then
       case "$phase" in
         Succeeded)
@@ -94,7 +96,7 @@ while :; do
           ;;
       esac
     elif [ -z "$slot" ]; then
-      echo "operation slot free and the recorded operation is not ours (initiatedBy=${user:-automated} revision=${revision:-none} startedAt=${started:-none}); re-requesting"
+      echo "operation slot free, recorded operation is not ours (username=${user:-none} automated=${automated:-false} revision=${revision:-none} startedAt=${started:-none}); requesting"
       request_sync
     fi
   fi

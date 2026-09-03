@@ -46,9 +46,9 @@ teardown() {
   [ -n "$workdir" ] && rm -rf "$workdir"
 }
 
-# snapshot phase user revision started finished slot hooks
+# snapshot phase user automated revision started finished slot hooks
 snapshot() {
-  printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" >>"$workdir/snapshots"
+  printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" >>"$workdir/snapshots"
 }
 
 run_subject() {
@@ -84,10 +84,10 @@ contains() {
 
 echo "a stale Succeeded phase must not pair with the requested revision"
 setup
-snapshot Succeeded ci "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
-snapshot Succeeded ci "$OLD" t1 t2 "$NEW" "PreSync:Succeeded,:Synced,"
-snapshot Running ci "$NEW" t3 "" "$NEW" ""
-snapshot Succeeded ci "$NEW" t3 t4 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$OLD" t1 t2 "$NEW" "PreSync:Succeeded,:Synced,"
+snapshot Running ci "" "$NEW" t3 "" "$NEW" ""
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Succeeded,:Synced,"
 status=0
 run_subject || status=$?
 check "exits 0 once its own operation finishes" 0 "$status"
@@ -95,23 +95,48 @@ check "kept polling past the pre-adoption snapshot" 4 "$(reads)"
 contains "names the hook it verified" "with its PreSync hook"
 teardown
 
+echo "an operation fused with an automated sync is not ours"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci true "$NEW" t3 t3 "" ":Synced,"
+snapshot Running ci "" "$NEW" t4 "" "$NEW" ""
+snapshot Succeeded ci "" "$NEW" t4 t5 "" "PreSync:Succeeded,:Synced,"
+status=0
+run_subject || status=$?
+check "exits 0 only after a purely ci operation runs" 0 "$status"
+contains "reports the fused operation" "automated=true"
+teardown
+
+echo "the wait never patches an occupied operation slot"
+setup
+snapshot Running "" true "$OLD" t1 "" "$OLD" ""
+snapshot Running "" true "$OLD" t1 "" "$OLD" ""
+snapshot Succeeded "" true "$OLD" t1 t2 "" ":Synced,"
+snapshot Running ci "" "$NEW" t3 "" "$NEW" ""
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Succeeded,:Synced,"
+status=0
+run_subject || status=$?
+check "exits 0" 0 "$status"
+check "patched once, only after the slot cleared" 1 "$(patches)"
+teardown
+
 echo "a hookless automated selfHeal sync must not satisfy the wait"
 setup
-snapshot Succeeded ci "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
-snapshot Succeeded "" "$NEW" t3 t3 "" ":Synced,"
-snapshot Running ci "$NEW" t4 "" "$NEW" ""
-snapshot Succeeded ci "$NEW" t4 t5 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded "" "" "$NEW" t3 t3 "" ":Synced,"
+snapshot Running ci "" "$NEW" t4 "" "$NEW" ""
+snapshot Succeeded ci "" "$NEW" t4 t5 "" "PreSync:Succeeded,:Synced,"
 status=0
 run_subject || status=$?
 check "exits 0 only after the ci operation runs" 0 "$status"
-check "re-requested the sync the selfHeal displaced" 2 "$(patches)"
-contains "reports the displaced operation" "re-requesting"
+check "requested only after the selfHeal released the slot" 1 "$(patches)"
+contains "reports the displaced operation" "recorded operation is not ours"
 teardown
 
 echo "a ci operation that converged without the hook must fail"
 setup
-snapshot Succeeded ci "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
-snapshot Succeeded ci "$NEW" t3 t4 "" ":Synced,"
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" ":Synced,"
 status=0
 run_subject || status=$?
 check "exits 1" 1 "$status"
@@ -120,8 +145,8 @@ teardown
 
 echo "a failed operation fails the deploy immediately"
 setup
-snapshot Succeeded ci "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
-snapshot Failed ci "$NEW" t3 t4 "" "PreSync:Failed,"
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Failed ci "" "$NEW" t3 t4 "" "PreSync:Failed,"
 status=0
 run_subject || status=$?
 check "exits 1" 1 "$status"
@@ -130,8 +155,8 @@ teardown
 
 echo "an operation that never becomes ours times out"
 setup
-snapshot Succeeded ci "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
-snapshot Running "" "$NEW" t3 "" "$NEW" ""
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Running "" "" "$NEW" t3 "" "$NEW" ""
 status=0
 TIMEOUT_OVERRIDE=0 run_subject || status=$?
 check "exits 1" 1 "$status"
@@ -140,8 +165,8 @@ teardown
 
 echo "an app with no hooks still deploys when no hook is required"
 setup
-snapshot Succeeded ci "$OLD" t1 t2 "" ":Synced,"
-snapshot Succeeded ci "$NEW" t3 t4 "" ":Synced,"
+snapshot Succeeded ci "" "$OLD" t1 t2 "" ":Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" ":Synced,"
 status=0
 HOOK_OVERRIDE="" run_subject || status=$?
 check "exits 0" 0 "$status"
