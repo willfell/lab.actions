@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Request an Argo CD sync of a pinned revision and block until the operation
-# this script initiated is the one that completed. The request is only made
-# when the operation slot is free: a merge patch onto an occupied slot fuses
-# with the automated sync holding it, which then runs without hooks.
+# this script initiated is the one that completed. The request replaces the
+# operation object wholesale and is only made when the slot looks free, so it
+# can never fuse with an automated sync that would then run without hooks.
 #
 # Usage: argo-await-sync.sh   with everything supplied via env:
 #   ARGO_APP        Application name (required)
@@ -50,8 +50,13 @@ snapshot() {
 }
 
 request_sync() {
-  kubectl -n "$NAMESPACE" patch application "$APP" --type merge -p \
-    "{\"operation\":{\"initiatedBy\":{\"username\":\"$USERNAME\"},\"sync\":{\"revision\":\"$REVISION\"}}}"
+  # A JSON Patch add on /operation replaces the whole object. A merge patch
+  # would fuse with an automated sync that claimed the slot after the last
+  # read, producing an operation marked both automated and ours that Argo runs
+  # without hooks. There is no window between the read and the patch in which
+  # that can happen here.
+  kubectl -n "$NAMESPACE" patch application "$APP" --type json -p \
+    "[{\"op\":\"add\",\"path\":\"/operation\",\"value\":{\"initiatedBy\":{\"username\":\"$USERNAME\"},\"sync\":{\"revision\":\"$REVISION\"}}}]"
 }
 
 identity_of() {
