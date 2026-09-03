@@ -285,6 +285,30 @@ workloads and nothing else. An operation can also finish while the hook it
 created is still `Running`, and that is a sync that did include the migration,
 so only an outright hook failure is treated as fatal.
 
+### Apps whose migrations are not hooks
+
+Leaving `require_hook` empty is the right setting for an app with no Argo hook,
+but it does not mean there is nothing to verify -- only that this action cannot
+be the thing that verifies it. The wait asserts that a hook Argo was supposed
+to run actually ran. Where the migration is not an Argo-visible resource, that
+assertion has no referent.
+
+An app that migrates in-process -- finance runs drizzle's `migrate()` inside
+`getDb()` on the first request -- has no Job for a hookless sync to skip: if the
+pod is serving, it has already migrated, because migrating is the precondition
+of serving. What can still go wrong there is a migration that fails or is never
+reached, and the check for that is the journal itself, not the sync operation:
+
+```sh
+kubectl -n <ns> exec deploy/<db> -- psql -U postgres -d <database> \
+  -tAc "select count(*) from <schema>.__drizzle_migrations"
+```
+
+compared against the number of migration files the deployed commit carries.
+Travel and flight-checker take the hook-shaped check because their migrations
+are `PreSync` Jobs; finance takes the journal-shaped one. Picking the wrong
+shape for an app reads as a passing check while proving nothing.
+
 ### The registry split
 
 `registry.network` collides with a real public TLD (`.network`), so the
