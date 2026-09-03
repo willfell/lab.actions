@@ -165,16 +165,53 @@ runs:
           echo "application not onboarded yet, stopping after image push"
           echo "onboarded=false" >> "$GITHUB_OUTPUT"
         fi
-    - name: Tell Argo to sync that revision now
+    - name: Sync the pinned revision and require the ci-initiated operation to succeed
       if: steps.onboarded.outputs.onboarded == 'true'
       shell: bash
       env:
         ARGO_APP: ${{ inputs.argo_app }}
         BUMP_SHA: ${{ steps.pin.outputs.bump_sha }}
+        WAIT_TIMEOUT: ${{ inputs.wait_timeout }}
       run: |
         set -euo pipefail
-        kubectl -n argocd patch application "$ARGO_APP" --type merge -p \
-          "{\"operation\":{\"initiatedBy\":{\"username\":\"ci\"},\"sync\":{\"revision\":\"$BUMP_SHA\"}}}"
+        field() {
+          kubectl -n argocd get application "$ARGO_APP" -o jsonpath="{$1}"
+        }
+        request_sync() {
+          kubectl -n argocd patch application "$ARGO_APP" --type merge -p \
+            "{\"operation\":{\"initiatedBy\":{\"username\":\"ci\"},\"sync\":{\"revision\":\"$BUMP_SHA\"}}}"
+        }
+        request_sync
+        deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
+        while :; do
+          phase=$(field '.status.operationState.phase')
+          op_user=$(field '.status.operationState.operation.initiatedBy.username')
+          op_rev=$(field '.status.operationState.operation.sync.revision')
+          if [ "$op_user" = "ci" ] && [ "$op_rev" = "$BUMP_SHA" ]; then
+            case "$phase" in
+              Succeeded)
+                echo "ci-initiated sync of $BUMP_SHA succeeded"
+                break
+                ;;
+              Failed|Error)
+                echo "ci-initiated sync of $BUMP_SHA ended in phase $phase" >&2
+                exit 1
+                ;;
+            esac
+          elif [ -z "$(field '.operation')" ]; then
+            case "${phase:-none}" in
+              Succeeded|Failed|Error|none)
+                echo "operation slot held a non-ci sync (initiatedBy=${op_user:-empty} revision=${op_rev:-none}); re-requesting"
+                request_sync
+                ;;
+            esac
+          fi
+          if [ "$(date +%s)" -ge "$deadline" ]; then
+            echo "timed out waiting for the ci-initiated sync of $BUMP_SHA" >&2
+            exit 1
+          fi
+          sleep 5
+        done
     - name: Wait for Argo to reach that revision, synced and healthy
       if: steps.onboarded.outputs.onboarded == 'true'
       shell: bash
