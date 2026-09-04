@@ -13,6 +13,7 @@ runs:
     - uses: opentofu/setup-opentofu@v1
       with:
         tofu_version: ${{ inputs.tofu_version }}
+        tofu_wrapper: false
     - name: Check formatting and validate every root
       shell: bash
       env:
