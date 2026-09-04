@@ -466,6 +466,20 @@ jobs:
 | --- | --- | --- |
 | `runner` | `runs-on` label the job is sent to, in the caller's repo | `ubuntu-latest` |
 
+Passing a `runner` other than `ubuntu-latest` also **enables the runner
+policy**: a step that scans the caller's own `.github/workflows/` and fails on
+any `runs-on` resolving to a GitHub-hosted label (`ubuntu-*`, `macos-*`,
+`windows-*`), including through a `matrix` whose values are visible in the file.
+
+Running your lint on a self-hosted pool is the sovereignty claim, so the claim
+is what arms the check -- a repo that deliberately stays GitHub-hosted passes no
+`runner`, gets the default, and is never scanned. That is deliberate: several
+repos outside the homelab fleet call this workflow and would fail the scan.
+
+Expressions carry no literal label, so a break-glass
+`runs-on: ${{ inputs.runner || 'lab' }}` passes. Self-hosted qualifier labels
+like `[self-hosted, macOS, ARM64]` also pass -- `macOS` is not `macos-*`.
+
 ### nextjs-site-deploy
 
 Builds a static-exported Next.js site and ships it: install (with the yarn
