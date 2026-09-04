@@ -75,6 +75,7 @@ runs:
       uses: opentofu/setup-opentofu@v1
       with:
         tofu_version: ${{ inputs.tofu_version }}
+        tofu_wrapper: false
 
     - name: Resolve the override label
       id: override

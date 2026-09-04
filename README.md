@@ -55,6 +55,13 @@ resolve action" — before running a single step.
 
 ## The OpenTofu actions
 
+All three set `tofu_wrapper: false` on `setup-opentofu`. The wrapper exists only
+to expose a `tofu` call's stdout, stderr and exit code as step outputs, which
+nothing here reads -- and it is a Node script, so on a runner image without node
+every `tofu` invocation dies with `/usr/bin/env: 'node': No such file or
+directory`. Disabling it removes the dependency rather than installing one.
+
+
 `lab-tofu-plan` and `lab-tofu-apply` are one pipeline split across two triggers.
 Plan runs on the pull request and comments what would change; apply runs on the
 merge and applies **the plan file it just wrote**, not a fresh one. That
