@@ -125,9 +125,14 @@ permissions:
 ```
 
 Check out the repository and install whatever `guard_command` needs before
-calling either action; neither does its own checkout or language setup. The
-override-label step shells out to `gh`, which is present on GitHub-hosted runners
-but not on this homelab's self-hosted image -- omit `override_label` there.
+calling either action; neither does its own checkout or language setup.
+
+The override-label step shells out to `gh`, which GitHub-hosted images carry and
+`ghcr.io/actions/actions-runner` does not. Since v1.10.4 that step installs the
+matching gh release itself when the binary is absent, so `override_label` works
+on a self-hosted pool. Nothing is downloaded unless you pass `override_label`
+AND gh is missing: the step is already gated on the input, and the install is
+guarded on `command -v gh`.
 
 ## lab-tofu-validate
 
