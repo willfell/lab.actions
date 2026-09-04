@@ -28,6 +28,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: stale carrying a `gh` dependency the runner image does not have.
 FLOATING_REFS = ("@main", "@master")
 
+#: The input every reusable workflow here exposes so a caller can send the job
+#: to its own runners, and the default that keeps pre-input callers unchanged.
+RUNNER_INPUT = "runner"
+DEFAULT_RUNNER = "ubuntu-latest"
+RUNS_ON_EXPRESSION = "${{ inputs.runner }}"
+
 
 def _action_files() -> list[Path]:
     return sorted(REPO_ROOT.glob("*/action.yml"))
@@ -88,6 +94,50 @@ def _check_reusable_workflow(path: Path, doc: dict) -> list[str]:
     if not doc.get("jobs"):
         problems.append(f"{path}: reusable workflow has no `jobs`")
     problems.extend(_check_no_floating_refs(path))
+    problems.extend(_check_runner_is_a_caller_choice(path, doc))
+    return problems
+
+
+def _check_runner_is_a_caller_choice(path: Path, doc: dict) -> list[str]:
+    """A reusable workflow must let the caller pick the runner.
+
+    A reusable-workflow job runs on the CALLER's runners, billed to the caller
+    and queued against the caller's pools -- but the label is written here. So
+    one hardcoded `runs-on: ubuntu-latest` in this repo silently put a
+    GitHub-hosted job into every consumer's pipeline, including the repos that
+    had otherwise moved entirely onto self-hosted ARC pools. That is why this
+    is a check rather than a note: the mistake is invisible from the caller's
+    side, where the only visible symptom is a bill and a runner name nobody
+    reads.
+
+    The default keeps `ubuntu-latest`, so a caller that passes nothing is
+    byte-identical to the behaviour before the input existed.
+    """
+    triggers = doc.get("on") or doc.get(True) or {}
+    call = triggers.get("workflow_call") or {}
+    declared = (call.get("inputs") or {}) if isinstance(call, dict) else {}
+
+    problems = []
+    if RUNNER_INPUT not in declared:
+        problems.append(
+            f"{path}: reusable workflow declares no `{RUNNER_INPUT}` input -- its jobs "
+            "run on the caller's runners, so the caller has to be able to choose them"
+        )
+    elif declared[RUNNER_INPUT].get("default") != DEFAULT_RUNNER:
+        problems.append(
+            f"{path}: `{RUNNER_INPUT}` defaults to "
+            f"{declared[RUNNER_INPUT].get('default')!r}, not {DEFAULT_RUNNER!r} -- "
+            "changing the default changes every existing caller's runner silently"
+        )
+
+    for name, job in (doc.get("jobs") or {}).items():
+        runs_on = job.get("runs-on")
+        if runs_on != RUNS_ON_EXPRESSION:
+            problems.append(
+                f"{path}: job {name!r} has `runs-on: {runs_on}` instead of "
+                f"{RUNS_ON_EXPRESSION} -- a hardcoded label here lands in every "
+                "consumer's pipeline and cannot be overridden from the caller"
+            )
     return problems
 
 

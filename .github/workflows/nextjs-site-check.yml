@@ -3,6 +3,9 @@ name: nextjs-site-check
 on:
   workflow_call:
     inputs:
+      runner:
+        type: string
+        default: ubuntu-latest
       app_dir:
         type: string
         default: app
@@ -15,7 +18,7 @@ permissions:
 
 jobs:
   validate-build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     defaults:
       run:
         working-directory: ${{ inputs.app_dir }}

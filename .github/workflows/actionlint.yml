@@ -1,14 +1,18 @@
 name: actionlint
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      runner:
+        type: string
+        default: ubuntu-latest
 
 permissions:
   contents: read
 
 jobs:
   actionlint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: raven-actions/actionlint@v2

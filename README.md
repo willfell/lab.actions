@@ -407,18 +407,46 @@ coded release-asset URLs for that one architecture.
 Reusable workflows ride the same repo-wide exact tags as the composites above --
 consume at an exact patch-level tag, never `@main` or a floating major.
 
-### actionlint
-
-Runs [`raven-actions/actionlint`](https://github.com/raven-actions/actionlint)
-against the caller's own workflows. No inputs.
+**Every one of them takes a `runner` input, and every one of them defaults it to
+`ubuntu-latest`.** A reusable workflow's jobs run on the *caller's* runners,
+billed to the caller and queued against the caller's pools -- but the label is
+written here, in this repo. So a hardcoded `runs-on` put a GitHub-hosted job into
+every consumer's pipeline, including repos that had otherwise moved onto
+self-hosted pools, and it was invisible from the caller's side. Pass `runner`
+with your own pool's label to keep the job on your infrastructure:
 
 ```yaml
 jobs:
   lint:
-    uses: willfell/lab.actions/.github/workflows/actionlint.yml@v1.4.0
+    uses: willfell/lab.actions/.github/workflows/actionlint.yml@v1.10.0
+    with:
+      runner: lab
+```
+
+The default is deliberate and load-bearing: a caller that passes nothing behaves
+exactly as it did before the input existed, so bumping the tag is not a runner
+change. `runs-on` receives the value as a single label, so `runner` takes one
+label (`ubuntu-latest`, `lab`, `wac`) rather than a list -- a multi-label
+self-hosted set like `[self-hosted, macOS, ARM64]` cannot be expressed through
+it. `.github/scripts/check_actions.py` fails CI if any reusable workflow here
+hardcodes `runs-on`, omits the input, or changes its default.
+
+### actionlint
+
+Runs [`raven-actions/actionlint`](https://github.com/raven-actions/actionlint)
+against the caller's own workflows.
+
+```yaml
+jobs:
+  lint:
+    uses: willfell/lab.actions/.github/workflows/actionlint.yml@v1.10.0
     permissions:
       contents: read
 ```
+
+| Input | Meaning | Default |
+| --- | --- | --- |
+| `runner` | `runs-on` label the job is sent to, in the caller's repo | `ubuntu-latest` |
 
 ### nextjs-site-deploy
 
@@ -433,7 +461,7 @@ drifted -- one step and one invalidation path apart.
 ```yaml
 jobs:
   deploy:
-    uses: willfell/lab.actions/.github/workflows/nextjs-site-deploy.yml@v1.6.0
+    uses: willfell/lab.actions/.github/workflows/nextjs-site-deploy.yml@v1.10.0
     permissions:
       id-token: write
       contents: read
@@ -447,6 +475,7 @@ jobs:
 
 | Input | Meaning | Default |
 | --- | --- | --- |
+| `runner` | `runs-on` label the job is sent to, in the caller's repo | `ubuntu-latest` |
 | `app_dir` | Directory holding the Next.js app | `app` |
 | `node_version` | Node release installed before `yarn install` | `22` |
 | `role_arn` | OIDC role assumed for the AWS credentials used to deploy | required |
@@ -489,11 +518,12 @@ Next.js site still builds, without any of the deploy steps.
 ```yaml
 jobs:
   check:
-    uses: willfell/lab.actions/.github/workflows/nextjs-site-check.yml@v1.6.0
+    uses: willfell/lab.actions/.github/workflows/nextjs-site-check.yml@v1.10.0
 ```
 
 | Input | Meaning | Default |
 | --- | --- | --- |
+| `runner` | `runs-on` label the job is sent to, in the caller's repo | `ubuntu-latest` |
 | `app_dir` | Directory holding the Next.js app | `app` |
 | `node_version` | Node release installed before `yarn install` | `22` |
 
