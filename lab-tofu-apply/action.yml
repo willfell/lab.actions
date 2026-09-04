@@ -73,8 +73,25 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         LABEL: ${{ inputs.override_label }}
+        GH_VERSION: "2.63.2"
       run: |
         set -uo pipefail
+        if ! command -v gh >/dev/null 2>&1; then
+          case "$(uname -m)" in
+            x86_64) gh_arch=amd64 ;;
+            aarch64 | arm64) gh_arch=arm64 ;;
+            *) echo "::error::unsupported architecture for gh: $(uname -m)" >&2; exit 1 ;;
+          esac
+          gh_dir="${RUNNER_TEMP:?}/gh"
+          mkdir -p "$gh_dir"
+          if ! curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_arch}.tar.gz" \
+            | tar -xz -C "$gh_dir" --strip-components=1; then
+            echo "::error::could not install gh ${GH_VERSION} for ${gh_arch}; the ${LABEL} override cannot be resolved" >&2
+            exit 1
+          fi
+          PATH="$gh_dir/bin:$PATH"
+          export PATH
+        fi
         labels="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
           --jq '.[].labels[].name' 2>/dev/null || true)"
         echo "labels resolved: ${labels:-<none>}"
