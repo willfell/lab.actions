@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: lab-actions
     steps:
       - uses: actions/checkout@v4
 
@@ -39,14 +39,13 @@ jobs:
 
   lint:
     uses: ./.github/workflows/actionlint.yml
+    with:
+      runner: lab-actions
     permissions:
       contents: read
 
   smoke:
-    strategy:
-      matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.runner }}
+    runs-on: lab-actions
     steps:
       - uses: actions/checkout@v4
       - uses: ./lab-tools
