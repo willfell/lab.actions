@@ -42,7 +42,13 @@ for tool in "${TOOLS[@]}"; do
         tar -xz -C "$BIN_DIR" kubeconform
       ;;
     helm)
+      # get-helm-3 verifies its own work with `command -v helm`, and $BIN_DIR
+      # does not reach PATH until the GITHUB_PATH append below, which only
+      # affects later steps. On a runner image that already ships helm the
+      # check passed against that copy; on one that does not, the installer
+      # writes the binary and then declares it missing.
       DESIRED_VERSION="${HELM_VERSION:-}" HELM_INSTALL_DIR="$BIN_DIR" USE_SUDO=false \
+        PATH="$BIN_DIR:$PATH" \
         bash <(curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3)
       ;;
     *)
