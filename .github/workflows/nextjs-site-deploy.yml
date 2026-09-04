@@ -3,6 +3,9 @@ name: nextjs-site-deploy
 on:
   workflow_call:
     inputs:
+      runner:
+        type: string
+        default: ubuntu-latest
       app_dir:
         type: string
         default: app
@@ -44,7 +47,7 @@ permissions:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       id-token: write
       contents: read
