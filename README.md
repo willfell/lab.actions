@@ -418,7 +418,7 @@ with your own pool's label to keep the job on your infrastructure:
 ```yaml
 jobs:
   lint:
-    uses: willfell/lab.actions/.github/workflows/actionlint.yml@v1.10.1
+    uses: willfell/lab.actions/.github/workflows/actionlint.yml@v1.10.2
     with:
       runner: lab
 ```
@@ -434,16 +434,18 @@ hardcodes `runs-on`, omits the input, or changes its default.
 ### actionlint
 
 Runs [`raven-actions/actionlint`](https://github.com/raven-actions/actionlint)
-against the caller's own workflows. It provisions node itself: the action is a
-composite whose tool-download step shells out to `npm`, and a self-hosted runner
-image does not have to carry one -- `ghcr.io/actions/actions-runner` does not,
-so the job died with `npm: command not found` the first time it ran on an ARC
-pool.
+against the caller's own workflows. It provisions the action's own dependencies
+first, because a self-hosted runner image does not have to carry them and
+`ghcr.io/actions/actions-runner` carries none of them: `node`/`npm` for the
+tool-download step, `pipx` for pyflakes, and `shellcheck` for linting `run:`
+blocks. Each was a separate red job on the first ARC pool to call this workflow.
+The apt step is skipped when both tools are already present, so a
+GitHub-hosted caller pays nothing.
 
 ```yaml
 jobs:
   lint:
-    uses: willfell/lab.actions/.github/workflows/actionlint.yml@v1.10.1
+    uses: willfell/lab.actions/.github/workflows/actionlint.yml@v1.10.2
     permissions:
       contents: read
 ```
