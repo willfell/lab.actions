@@ -66,15 +66,17 @@ identity_of() {
 }
 
 # The hookless syncs this wait exists to reject carry no entry for the hook at
-# all -- their syncResult is the drifted workloads and nothing else. An
-# operation can also finish while the hook it created is still Running, which
-# is a sync that did include the migration, so presence is the test and only an
-# outright hook failure is fatal.
-hook_ran() {
+# all -- their syncResult is the drifted workloads and nothing else. Presence
+# alone is not proof either: an operation can finish with its hook frozen at
+# Running in the syncResult, and travel's 2026-09-05 outage shipped behind
+# exactly that kind of unproven hook. Only Succeeded is proof; Failed/Error
+# and absence are fatal; anything else keeps polling until the deadline.
+hook_state() {
   case ",$1" in
-    *",$REQUIRE_HOOK:Failed,"* | *",$REQUIRE_HOOK:Error,"*) return 1 ;;
-    *",$REQUIRE_HOOK:"*) return 0 ;;
-    *) return 1 ;;
+    *",$REQUIRE_HOOK:Failed,"* | *",$REQUIRE_HOOK:Error,"*) echo failed ;;
+    *",$REQUIRE_HOOK:Succeeded,"*) echo succeeded ;;
+    *",$REQUIRE_HOOK:"*) echo pending ;;
+    *) echo absent ;;
   esac
 }
 
@@ -83,24 +85,41 @@ if ! baseline=$(snapshot); then
   exit 1
 fi
 baseline_identity=$(identity_of "$baseline")
+baseline_started=$(printf '%s' "$baseline" | cut -d'|' -f5)
 
 deadline=$(($(date +%s) + TIMEOUT))
 
 while :; do
   if snap=$(snapshot); then
     IFS='|' read -r phase user automated revision started finished slot hooks <<<"$snap"
+    # startedAt must differ from the baseline operation's: the controller
+    # writes operation adoption and the finished result separately, so a
+    # single read can pair our freshly requested revision with the previous
+    # operation's Succeeded phase and syncResult. That torn read carries the
+    # previous startedAt, and a genuinely new operation never does
+    # (travel 2026-09-05: such a read declared hook success 5s after the
+    # request while the real convergence was a hookless selfHeal sync).
     if [ "$user" = "$USERNAME" ] && [ "$revision" = "$REVISION" ] &&
-      [ "$(identity_of "$snap")" != "$baseline_identity" ]; then
+      [ "$(identity_of "$snap")" != "$baseline_identity" ] &&
+      { [ -z "$baseline_started" ] || [ "$started" != "$baseline_started" ]; }; then
       case "$phase" in
         Succeeded)
           if [ -n "$finished" ]; then
-            if [ -n "$REQUIRE_HOOK" ] && ! hook_ran "$hooks"; then
-              echo "the $USERNAME-initiated sync of $REVISION ran no successful $REQUIRE_HOOK hook" >&2
-              echo "syncResult hooks: ${hooks:-none}" >&2
-              exit 1
+            if [ -z "$REQUIRE_HOOK" ]; then
+              echo "$USERNAME-initiated sync of $REVISION succeeded"
+              exit 0
             fi
-            echo "$USERNAME-initiated sync of $REVISION succeeded${REQUIRE_HOOK:+ with its $REQUIRE_HOOK hook}"
-            exit 0
+            case "$(hook_state "$hooks")" in
+              succeeded)
+                echo "$USERNAME-initiated sync of $REVISION succeeded with its $REQUIRE_HOOK hook"
+                exit 0
+                ;;
+              failed | absent)
+                echo "the $USERNAME-initiated sync of $REVISION ran no successful $REQUIRE_HOOK hook" >&2
+                echo "syncResult hooks: ${hooks:-none}" >&2
+                exit 1
+                ;;
+            esac
           fi
           ;;
         Failed | Error)
@@ -117,6 +136,7 @@ while :; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
     echo "timed out after ${TIMEOUT}s waiting for the $USERNAME-initiated sync of $REVISION" >&2
     echo "an automated selfHeal sync can converge the Deployment without running hooks; this wait refuses to accept it" >&2
+    echo "a hook still reported Running, or an operation carrying the previous startedAt, is likewise never accepted as proof" >&2
     exit 1
   fi
   sleep "$POLL_INTERVAL"
