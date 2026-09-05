@@ -176,13 +176,48 @@ check "exits 1" 1 "$status"
 contains "names the missing hook" "ran no successful PreSync hook"
 teardown
 
-echo "an operation whose hook is still running counts as having run it"
+echo "a finished operation whose hook is frozen at Running is not proof; the wait times out"
 setup
 snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
 snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Running,:Running,"
 status=0
+TIMEOUT_OVERRIDE=1 run_subject || status=$?
+check "exits 1" 1 "$status"
+contains "explains the frozen hook" "timed out"
+teardown
+
+echo "a hook that resolves to Succeeded on a later read is accepted"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Running,:Running,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Succeeded,:Synced,"
+status=0
 run_subject || status=$?
 check "exits 0" 0 "$status"
+contains "names the hook it verified" "with its PreSync hook"
+teardown
+
+echo "a torn read pairing our revision with the previous operation's timestamps is rejected"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci true "$NEW" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Running ci "" "$NEW" t3 "" "" ""
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Succeeded,:Synced,"
+status=0
+run_subject || status=$?
+check "exits 0 only once a genuinely new operation succeeds" 0 "$status"
+check "kept polling past the torn read" 5 "$(reads)"
+teardown
+
+echo "a torn read that never resolves into a fresh operation times out"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci true "$NEW" t1 t2 "" "PreSync:Succeeded,:Synced,"
+status=0
+TIMEOUT_OVERRIDE=1 run_subject || status=$?
+check "exits 1" 1 "$status"
+contains "refuses the stale result" "timed out"
 teardown
 
 echo "an operation whose hook failed is rejected"
