@@ -39,8 +39,12 @@ All actions share one tag. A release touching only `lab-deploy` still moves
 `lab-build`'s pin to the same ref, pointing at byte-identical code. Reusable
 workflows (below) ride the same repo-wide exact tags.
 
-`CONSUMERS.md` tracks every pinned component, repo, and file. Bumping a tag means
-walking that table and opening one PR per affected consumer.
+`CONSUMERS.md` tracks every pinned component, repo, and file, and `CHANGELOG.md`
+records which components each tag actually changed. Bumping a tag means reading
+the changelog for the components that moved, then walking the consumers table for
+the repos pinning those. A consumer whose components are untouched needs no PR;
+one whose components moved and gets skipped runs old code indefinitely, with
+nothing to say so.
 
 ## Releasing
 
@@ -52,6 +56,23 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 
 Until the tag exists, a consumer pinned to it fails at job start-up with "unable to
 resolve action" — before running a single step.
+
+**Which number to move.** All components share one tag, so the version describes
+the repo, not any one action:
+
+- **patch** — a fix inside a component that does not change its inputs, outputs,
+  or what a caller must pass.
+- **minor** — a new component, a new optional input, or a behaviour change a
+  caller could notice. A new *required* input is a minor here too: consumers pin
+  exact tags, so nobody is broken until they choose to bump, and the changelog
+  row is what warns them.
+- **major** — reserved. Nothing has needed one; `v1` is deliberately not
+  maintained as a floating pointer (see above), so a major bump would buy only
+  the label.
+
+Add the `CHANGELOG.md` row **in the PR that makes the change**, not at tag time.
+A changelog written at tag time is written from memory, and the components column
+is the part consumers rely on.
 
 ## The OpenTofu actions
 
