@@ -32,6 +32,16 @@ for arg in "$@"; do
     exit 0
   fi
 done
+case "$*" in
+  *'?(@.hookType'*)
+    [ -f "$FAKE_STATE/hookresources" ] && cat "$FAKE_STATE/hookresources"
+    exit 0
+    ;;
+  *" job "*)
+    [ -f "$FAKE_STATE/jobstatus" ] && cat "$FAKE_STATE/jobstatus"
+    exit 0
+    ;;
+esac
 count=$(cat "$FAKE_STATE/reads")
 count=$((count + 1))
 printf '%s' "$count" >"$FAKE_STATE/reads"
@@ -212,6 +222,30 @@ status=0
 TIMEOUT_OVERRIDE=1 run_subject || status=$?
 check "exits 1" 1 "$status"
 contains "explains the frozen hook" "timed out"
+teardown
+
+echo "a hook frozen at Running in syncResult is proven by the job itself"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Running,:Running,"
+printf 'Job|travel|travel-migrate\n' >"$workdir/hookresources"
+printf '1' >"$workdir/jobstatus"
+status=0
+run_subject || status=$?
+check "exits 0 on the job's own completion" 0 "$status"
+contains "cites the completed hook job" "completed"
+teardown
+
+echo "a hook frozen at Running whose job failed with no success keeps waiting, then times out"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Running,:Running,"
+printf 'Job|travel|travel-migrate\n' >"$workdir/hookresources"
+printf '' >"$workdir/jobstatus"
+status=0
+TIMEOUT_OVERRIDE=1 run_subject || status=$?
+check "exits 1" 1 "$status"
+contains "refuses the unproven hook" "timed out"
 teardown
 
 echo "a hook that resolves to Succeeded on a later read is accepted"

@@ -65,6 +65,25 @@ identity_of() {
   printf '%s' "$1" | cut -d'|' -f1-6
 }
 
+# syncResult is not ground truth: Argo can finish the operation with the
+# hook's phase frozen at Running while the Job itself completed seconds
+# later (travel 2026-09-07, second occurrence). When the recorded phase is
+# not Succeeded, ask the Job. Returns 0 the moment any required hook Job
+# reports a completion.
+hook_job_completed() {
+  local rows kind ns name succeeded
+  rows=$(kubectl -n "$NAMESPACE" get application "$APP" -o jsonpath="{range .status.operationState.syncResult.resources[?(@.hookType=='$REQUIRE_HOOK')]}{.kind}|{.namespace}|{.name}{'\n'}{end}" 2>/dev/null) || return 1
+  while IFS='|' read -r kind ns name; do
+    [ "$kind" = "Job" ] && [ -n "$ns" ] && [ -n "$name" ] || continue
+    succeeded=$(kubectl -n "$ns" get job "$name" -o jsonpath='{.status.succeeded}' 2>/dev/null) || continue
+    if [ -n "$succeeded" ] && [ "$succeeded" -ge 1 ]; then
+      echo "hook Job $ns/$name completed ($succeeded succeeded)"
+      return 0
+    fi
+  done <<<"$rows"
+  return 1
+}
+
 # The hookless syncs this wait exists to reject carry no entry for the hook at
 # all -- their syncResult is the drifted workloads and nothing else. Presence
 # alone is not proof either: an operation can finish with its hook frozen at
@@ -131,9 +150,14 @@ while :; do
                 exit 1
                 ;;
               pending)
-                # The operation finished but its hook is not yet proven.
-                # Never re-request here: a fresh sync's BeforeHookCreation
+                # The operation finished but syncResult never got the
+                # hook's final phase -- ask the Job itself. Never
+                # re-request here: a fresh sync's BeforeHookCreation
                 # would delete the hook job while it may still be running.
+                if proof=$(hook_job_completed); then
+                  echo "sync of $REVISION succeeded; $proof"
+                  exit 0
+                fi
                 hook_pending=1
                 ;;
             esac
