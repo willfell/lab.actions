@@ -89,6 +89,12 @@ baseline_started=$(printf '%s' "$baseline" | cut -d'|' -f5)
 
 deadline=$(($(date +%s) + TIMEOUT))
 
+# The initiator is not the test -- CI's requested operation routinely loses
+# the slot to Argo's own automated sync of the same revision, and an
+# automated FULL sync runs hooks just as well (travel 2026-09-07: the fused
+# automated sync ran the migrate hook while the wait, keyed on username,
+# timed out anyway). What makes a result trustworthy is the revision, a
+# fresh startedAt, and the hook's own Succeeded phase.
 while :; do
   if snap=$(snapshot); then
     IFS='|' read -r phase user automated revision started finished slot hooks <<<"$snap"
@@ -99,36 +105,58 @@ while :; do
     # previous startedAt, and a genuinely new operation never does
     # (travel 2026-09-05: such a read declared hook success 5s after the
     # request while the real convergence was a hookless selfHeal sync).
-    if [ "$user" = "$USERNAME" ] && [ "$revision" = "$REVISION" ] &&
+    fresh=""
+    if [ "$revision" = "$REVISION" ] &&
       [ "$(identity_of "$snap")" != "$baseline_identity" ] &&
       { [ -z "$baseline_started" ] || [ "$started" != "$baseline_started" ]; }; then
+      fresh=1
+    fi
+    hook_pending=""
+    if [ -n "$fresh" ]; then
       case "$phase" in
         Succeeded)
           if [ -n "$finished" ]; then
             if [ -z "$REQUIRE_HOOK" ]; then
-              echo "$USERNAME-initiated sync of $REVISION succeeded"
+              echo "sync of $REVISION succeeded (initiated by ${user:-argo}${automated:+, automated})"
               exit 0
             fi
             case "$(hook_state "$hooks")" in
               succeeded)
-                echo "$USERNAME-initiated sync of $REVISION succeeded with its $REQUIRE_HOOK hook"
+                echo "sync of $REVISION succeeded with its $REQUIRE_HOOK hook (initiated by ${user:-argo}${automated:+, automated})"
                 exit 0
                 ;;
-              failed | absent)
-                echo "the $USERNAME-initiated sync of $REVISION ran no successful $REQUIRE_HOOK hook" >&2
+              failed)
+                echo "the sync of $REVISION ran its $REQUIRE_HOOK hook and the hook failed" >&2
                 echo "syncResult hooks: ${hooks:-none}" >&2
                 exit 1
+                ;;
+              pending)
+                # The operation finished but its hook is not yet proven.
+                # Never re-request here: a fresh sync's BeforeHookCreation
+                # would delete the hook job while it may still be running.
+                hook_pending=1
                 ;;
             esac
           fi
           ;;
         Failed | Error)
-          echo "the $USERNAME-initiated sync of $REVISION ended in phase $phase" >&2
-          exit 1
+          if [ "$user" = "$USERNAME" ]; then
+            echo "the $USERNAME-initiated sync of $REVISION ended in phase $phase" >&2
+            exit 1
+          fi
           ;;
       esac
-    elif [ -z "$slot" ]; then
-      echo "operation slot free, recorded operation is not ours (username=${user:-none} automated=${automated:-false} revision=${revision:-none} startedAt=${started:-none}); requesting"
+    fi
+    # Re-request whenever the slot is free and the recorded operation is
+    # finished without being proof: someone else's operation, a torn read,
+    # or a sync of our revision whose syncResult lacks the hook entirely
+    # (a selective selfHeal converging the workload without hooks).
+    if [ -z "$slot" ] && [ -z "$hook_pending" ] && [ "$phase" != "Running" ]; then
+      if [ -n "$fresh" ]; then
+        echo "operation at $REVISION finished without proof of the $REQUIRE_HOOK hook; requesting a fresh sync"
+      else
+        echo "operation slot free, recorded operation is not ours (username=${user:-none} automated=${automated:-false} revision=${revision:-none} startedAt=${started:-none}); requesting"
+      fi
       request_sync
     fi
   fi

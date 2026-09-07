@@ -120,6 +120,16 @@ else
 fi
 teardown
 
+echo "an automated full sync of the requested revision counts when its hook succeeded"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded "" true "$NEW" t3 t4 "" "PreSync:Succeeded,:Synced,"
+status=0
+run_subject || status=$?
+check "exits 0 without demanding ci as the initiator" 0 "$status"
+contains "names the hook it verified" "with its PreSync hook"
+teardown
+
 echo "an operation fused with an automated sync still counts when its hook ran"
 setup
 snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
@@ -130,14 +140,20 @@ check "exits 0" 0 "$status"
 contains "names the hook it verified" "with its PreSync hook"
 teardown
 
-echo "a fused operation that skipped the hook is still rejected"
+echo "a fused operation that skipped the hook is retried, then times out without proof"
 setup
 snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
 snapshot Succeeded ci true "$NEW" t3 t4 "" ":Synced,"
 status=0
-run_subject || status=$?
+TIMEOUT_OVERRIDE=1 run_subject || status=$?
 check "exits 1" 1 "$status"
-contains "names the missing hook" "ran no successful PreSync hook"
+contains "refuses the unproven result" "timed out"
+if [ "$(patches)" -ge 1 ]; then
+  echo "  ok: re-requested a sync to get the hook run"
+else
+  echo "  FAIL: never re-requested after the unproven operation"
+  failures=$((failures + 1))
+fi
 teardown
 
 echo "the wait never patches an occupied operation slot"
@@ -163,17 +179,29 @@ status=0
 run_subject || status=$?
 check "exits 0 only after the ci operation runs" 0 "$status"
 check "requested only after the selfHeal released the slot" 1 "$(patches)"
-contains "reports the displaced operation" "recorded operation is not ours"
+contains "reports the unproven convergence" "without proof"
 teardown
 
-echo "a ci operation that converged without the hook must fail"
+echo "a ci operation that converged without the hook is retried, then times out"
 setup
 snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
 snapshot Succeeded ci "" "$NEW" t3 t4 "" ":Synced,"
 status=0
-run_subject || status=$?
+TIMEOUT_OVERRIDE=1 run_subject || status=$?
 check "exits 1" 1 "$status"
-contains "names the missing hook" "ran no successful PreSync hook"
+contains "refuses the unproven result" "timed out"
+teardown
+
+echo "a hookless sync at the requested revision triggers a fresh request, and the retry's hook wins"
+setup
+snapshot Succeeded ci "" "$OLD" t1 t2 "" "PreSync:Succeeded,:Synced,"
+snapshot Succeeded ci "" "$NEW" t3 t4 "" ":Synced,"
+snapshot Running ci "" "$NEW" t5 "" "$NEW" ""
+snapshot Succeeded ci "" "$NEW" t5 t6 "" "PreSync:Succeeded,:Synced,"
+status=0
+run_subject || status=$?
+check "exits 0 once the retried sync proves the hook" 0 "$status"
+contains "explains the retry" "without proof"
 teardown
 
 echo "a finished operation whose hook is frozen at Running is not proof; the wait times out"
@@ -227,7 +255,7 @@ snapshot Succeeded ci "" "$NEW" t3 t4 "" "PreSync:Failed,:Synced,"
 status=0
 run_subject || status=$?
 check "exits 1" 1 "$status"
-contains "names the hook" "ran no successful PreSync hook"
+contains "names the hook" "the hook failed"
 teardown
 
 echo "a failed operation fails the deploy immediately"
