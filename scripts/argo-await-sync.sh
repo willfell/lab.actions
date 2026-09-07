@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
-# Request an Argo CD sync of a pinned revision and block until the operation
-# this script initiated is the one that completed, and -- when REQUIRE_HOOK is
-# set -- that the hook proving the migration ran is in its syncResult. Argo's
-# own auto-sync can stamp automated: true onto the operation carrying our
-# username, so the hook, not the initiator, is what makes the result
-# trustworthy.
+# Request an Argo CD sync of a pinned revision and block until the
+# Application reports Synced at that revision.
+#
+# This wait no longer tries to prove that migration hooks ran by reading
+# Argo's operation record. One week of production deploys showed that record
+# lying three different ways: a requested full sync recorded as an automated
+# selective selfHeal operation, hook phases frozen at Running in the
+# syncResult of a finished operation, and completed hook Jobs deleted before
+# they could be probed. The proof that migrations ran lives where it cannot
+# be fooled: each app's health route compares its shipped migration journal
+# against the database and reports db=behind with a 503, which fails the
+# deploy's own Healthy wait and health-verify step (travel#35 is the
+# pattern).
 #
 # Usage: argo-await-sync.sh   with everything supplied via env:
 #   ARGO_APP        Application name (required)
-#   BUMP_SHA        revision the operation must carry (required)
+#   BUMP_SHA        revision the app must reach, Synced (required)
 #   ARGO_NAMESPACE  namespace holding the Application (default argocd)
 #   SYNC_USERNAME   initiatedBy.username stamped on the request (default ci)
-#   REQUIRE_HOOK    hook type that must have run inside the operation, e.g.
-#                   PreSync; empty disables the check
+#   REQUIRE_HOOK    retired, accepted for compatibility and ignored
 #   WAIT_TIMEOUT    seconds to wait before giving up (default 300)
 #   POLL_INTERVAL   seconds between polls (default 5)
 set -euo pipefail
@@ -25,17 +31,13 @@ REQUIRE_HOOK="${REQUIRE_HOOK:-}"
 TIMEOUT="${WAIT_TIMEOUT:-300}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 
-# Every field the decision depends on comes out of ONE read. Reading them with
-# separate calls lets a Succeeded phase from the previous operation pair with
-# the revision of the one just requested -- a state that never existed.
-TEMPLATE='{.status.operationState.phase}'
-TEMPLATE="$TEMPLATE|{.status.operationState.operation.initiatedBy.username}"
-TEMPLATE="$TEMPLATE|{.status.operationState.operation.initiatedBy.automated}"
-TEMPLATE="$TEMPLATE|{.status.operationState.operation.sync.revision}"
-TEMPLATE="$TEMPLATE|{.status.operationState.startedAt}"
-TEMPLATE="$TEMPLATE|{.status.operationState.finishedAt}"
-TEMPLATE="$TEMPLATE|{.operation.sync.revision}"
-TEMPLATE="$TEMPLATE|{range .status.operationState.syncResult.resources[*]}{.hookType}:{.hookPhase},{end}"
+if [ -n "$REQUIRE_HOOK" ]; then
+  echo "require_hook is retired and ignored: migration proof is the app's schema-aware health route, not Argo's operation record"
+fi
+
+# One read per poll: sync status, synced revision, and whether the
+# operation slot is occupied.
+TEMPLATE='{.status.sync.status}|{.status.sync.revision}|{.operation.sync.revision}'
 
 snapshot() {
   local attempt out
@@ -52,143 +54,35 @@ snapshot() {
 }
 
 request_sync() {
-  # A JSON Patch add on /operation replaces the whole object. A merge patch
-  # would fuse with an automated sync that claimed the slot after the last
-  # read, producing an operation marked both automated and ours that Argo runs
-  # without hooks. There is no window between the read and the patch in which
-  # that can happen here.
+  # A JSON Patch add on /operation replaces the whole object, so the request
+  # cannot fuse with an automated sync that claimed the slot after the last
+  # read.
   kubectl -n "$NAMESPACE" patch application "$APP" --type json -p \
     "[{\"op\":\"add\",\"path\":\"/operation\",\"value\":{\"initiatedBy\":{\"username\":\"$USERNAME\"},\"sync\":{\"revision\":\"$REVISION\"}}}]"
 }
 
-identity_of() {
-  printf '%s' "$1" | cut -d'|' -f1-6
-}
-
-# syncResult is not ground truth: Argo can finish the operation with the
-# hook's phase frozen at Running while the Job itself completed seconds
-# later (travel 2026-09-07, second occurrence). When the recorded phase is
-# not Succeeded, ask the Job. Returns 0 the moment any required hook Job
-# reports a completion.
-hook_job_completed() {
-  local rows kind ns name succeeded
-  rows=$(kubectl -n "$NAMESPACE" get application "$APP" -o jsonpath="{range .status.operationState.syncResult.resources[?(@.hookType=='$REQUIRE_HOOK')]}{.kind}|{.namespace}|{.name}{'\n'}{end}" 2>/dev/null) || return 1
-  while IFS='|' read -r kind ns name; do
-    [ "$kind" = "Job" ] && [ -n "$ns" ] && [ -n "$name" ] || continue
-    succeeded=$(kubectl -n "$ns" get job "$name" -o jsonpath='{.status.succeeded}' 2>/dev/null) || continue
-    if [ -n "$succeeded" ] && [ "$succeeded" -ge 1 ]; then
-      echo "hook Job $ns/$name completed ($succeeded succeeded)"
-      return 0
-    fi
-  done <<<"$rows"
-  return 1
-}
-
-# The hookless syncs this wait exists to reject carry no entry for the hook at
-# all -- their syncResult is the drifted workloads and nothing else. Presence
-# alone is not proof either: an operation can finish with its hook frozen at
-# Running in the syncResult, and travel's 2026-09-05 outage shipped behind
-# exactly that kind of unproven hook. Only Succeeded is proof; Failed/Error
-# and absence are fatal; anything else keeps polling until the deadline.
-hook_state() {
-  case ",$1" in
-    *",$REQUIRE_HOOK:Failed,"* | *",$REQUIRE_HOOK:Error,"*) echo failed ;;
-    *",$REQUIRE_HOOK:Succeeded,"*) echo succeeded ;;
-    *",$REQUIRE_HOOK:"*) echo pending ;;
-    *) echo absent ;;
-  esac
-}
-
-if ! baseline=$(snapshot); then
-  echo "could not read application $APP in namespace $NAMESPACE" >&2
-  exit 1
-fi
-baseline_identity=$(identity_of "$baseline")
-baseline_started=$(printf '%s' "$baseline" | cut -d'|' -f5)
-
 deadline=$(($(date +%s) + TIMEOUT))
+requested=""
 
-# The initiator is not the test -- CI's requested operation routinely loses
-# the slot to Argo's own automated sync of the same revision, and an
-# automated FULL sync runs hooks just as well (travel 2026-09-07: the fused
-# automated sync ran the migrate hook while the wait, keyed on username,
-# timed out anyway). What makes a result trustworthy is the revision, a
-# fresh startedAt, and the hook's own Succeeded phase.
 while :; do
   if snap=$(snapshot); then
-    IFS='|' read -r phase user automated revision started finished slot hooks <<<"$snap"
-    # startedAt must differ from the baseline operation's: the controller
-    # writes operation adoption and the finished result separately, so a
-    # single read can pair our freshly requested revision with the previous
-    # operation's Succeeded phase and syncResult. That torn read carries the
-    # previous startedAt, and a genuinely new operation never does
-    # (travel 2026-09-05: such a read declared hook success 5s after the
-    # request while the real convergence was a hookless selfHeal sync).
-    fresh=""
-    if [ "$revision" = "$REVISION" ] &&
-      [ "$(identity_of "$snap")" != "$baseline_identity" ] &&
-      { [ -z "$baseline_started" ] || [ "$started" != "$baseline_started" ]; }; then
-      fresh=1
+    IFS='|' read -r sync_status sync_revision slot <<<"$snap"
+    if [ "$sync_status" = "Synced" ] && [ "$sync_revision" = "$REVISION" ]; then
+      echo "application $APP is Synced at $REVISION"
+      exit 0
     fi
-    hook_pending=""
-    if [ -n "$fresh" ]; then
-      case "$phase" in
-        Succeeded)
-          if [ -n "$finished" ]; then
-            if [ -z "$REQUIRE_HOOK" ]; then
-              echo "sync of $REVISION succeeded (initiated by ${user:-argo}${automated:+, automated})"
-              exit 0
-            fi
-            case "$(hook_state "$hooks")" in
-              succeeded)
-                echo "sync of $REVISION succeeded with its $REQUIRE_HOOK hook (initiated by ${user:-argo}${automated:+, automated})"
-                exit 0
-                ;;
-              failed)
-                echo "the sync of $REVISION ran its $REQUIRE_HOOK hook and the hook failed" >&2
-                echo "syncResult hooks: ${hooks:-none}" >&2
-                exit 1
-                ;;
-              pending)
-                # The operation finished but syncResult never got the
-                # hook's final phase -- ask the Job itself. Never
-                # re-request here: a fresh sync's BeforeHookCreation
-                # would delete the hook job while it may still be running.
-                if proof=$(hook_job_completed); then
-                  echo "sync of $REVISION succeeded; $proof"
-                  exit 0
-                fi
-                hook_pending=1
-                ;;
-            esac
-          fi
-          ;;
-        Failed | Error)
-          if [ "$user" = "$USERNAME" ]; then
-            echo "the $USERNAME-initiated sync of $REVISION ended in phase $phase" >&2
-            exit 1
-          fi
-          ;;
-      esac
-    fi
-    # Re-request whenever the slot is free and the recorded operation is
-    # finished without being proof: someone else's operation, a torn read,
-    # or a sync of our revision whose syncResult lacks the hook entirely
-    # (a selective selfHeal converging the workload without hooks).
-    if [ -z "$slot" ] && [ -z "$hook_pending" ] && [ "$phase" != "Running" ]; then
-      if [ -n "$fresh" ]; then
-        echo "operation at $REVISION finished without proof of the $REQUIRE_HOOK hook; requesting a fresh sync"
-      else
-        echo "operation slot free, recorded operation is not ours (username=${user:-none} automated=${automated:-false} revision=${revision:-none} startedAt=${started:-none}); requesting"
+    if [ -z "$slot" ]; then
+      if [ -z "$requested" ]; then
+        echo "sync status is ${sync_status:-unknown} at ${sync_revision:-none}; requesting a sync of $REVISION"
       fi
+      requested=1
       request_sync
     fi
   fi
 
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "timed out after ${TIMEOUT}s waiting for the $USERNAME-initiated sync of $REVISION" >&2
-    echo "an automated selfHeal sync can converge the Deployment without running hooks; this wait refuses to accept it" >&2
-    echo "a hook still reported Running, or an operation carrying the previous startedAt, is likewise never accepted as proof" >&2
+    echo "timed out after ${TIMEOUT}s waiting for $APP to reach Synced at $REVISION" >&2
+    echo "if the sync ran but pods never went Healthy, check the app's health route: db=behind means a migration is missing" >&2
     exit 1
   fi
   sleep "$POLL_INTERVAL"
