@@ -4,7 +4,7 @@ Every repo pinning this library, by component and file. Bumping a tag means
 walking this table and opening one PR per repo whose pinned components changed —
 `CHANGELOG.md` says which those are.
 
-**Reconciled against the live default branch of every repo on 2026-09-06.** The
+**Reconciled against the live default branch of every repo on 2026-09-07.** The
 previous version of this table was substantially wrong: it claimed `v1.3.0` for
 `lab` and `terraform-global` (really `v1.10.5`) and for `egnyte-mcp` (really
 `v1.7.0`), and it omitted eight consuming repos entirely. A stale table is worse
@@ -16,12 +16,12 @@ than no table, because the walk it drives silently skips whatever it forgot.
 | `actionlint` | fellhoelter-consulting | `.github/workflows/pr.yml` | `v1.6.0` |
 | `nextjs-site-check` | fellhoelter-consulting | `.github/workflows/pr.yml` | `v1.6.0` |
 | `nextjs-site-deploy` | fellhoelter-consulting | `.github/workflows/deploy.yml` | `v1.6.0` |
-| `actionlint` | finance | `.github/workflows/ci.yml` | `v1.10.5` |
-| `lab-gitops-deploy` | finance | `.github/workflows/ci.yml` | `v1.9.4` |
-| `lab-kubeconform` | finance | `.github/workflows/ci.yml` | `v1.9.4` |
-| `actionlint` | flight-checker | `.github/workflows/ci.yml` | `v1.10.5` |
-| `lab-gitops-deploy` | flight-checker | `.github/workflows/ci.yml` | `v1.9.4` |
-| `lab-kubeconform` | flight-checker | `.github/workflows/ci.yml` | `v1.9.4` |
+| `actionlint` | finance | `.github/workflows/ci.yml` | `v1.10.8` |
+| `lab-gitops-deploy` | finance | `.github/workflows/ci.yml` | `v1.10.8` |
+| `lab-kubeconform` | finance | `.github/workflows/ci.yml` | `v1.10.8` |
+| `actionlint` | flight-checker | `.github/workflows/ci.yml` | `v1.10.8` |
+| `lab-gitops-deploy` | flight-checker | `.github/workflows/ci.yml` | `v1.10.8` |
+| `lab-kubeconform` | flight-checker | `.github/workflows/ci.yml` | `v1.10.8` |
 | `actionlint` | headspace | `.github/workflows/ci.yml` | `v1.10.5` |
 | `actionlint` | homebrew-sauce | `.github/workflows/ci.yml` | `v1.7.1` |
 | `nextjs-site-deploy` | jack-creek-patch | `.github/workflows/deploy.yml` | `v1.7.0` |
@@ -36,12 +36,12 @@ than no table, because the walk it drives silently skips whatever it forgot.
 | `lab-tofu-apply` | terraform-global | `.github/workflows/tofu-apply.yml` | `v1.10.5` |
 | `lab-tofu-plan` | terraform-global | `.github/workflows/tofu-plan.yml` | `v1.10.5` |
 | `lab-tofu-validate` | terraform-global | `.github/workflows/tofu-plan.yml` | `v1.10.5` |
-| `actionlint` | travel | `.github/workflows/ci.yml` | `v1.10.6` |
-| `lab-gitops-deploy` | travel | `.github/workflows/ci.yml` | `v1.10.6` |
-| `lab-kubeconform` | travel | `.github/workflows/ci.yml` | `v1.10.6` |
-| `actionlint` | wac | `.github/workflows/ci.yml` | `v1.10.5` |
-| `lab-gitops-deploy` | wac | `.github/workflows/ci.yml` | `v1.9.4` |
-| `lab-kubeconform` | wac | `.github/workflows/ci.yml` | `v1.9.4` |
+| `actionlint` | travel | `.github/workflows/ci.yml` | `v1.10.8` |
+| `lab-gitops-deploy` | travel | `.github/workflows/ci.yml` | `v1.10.8` |
+| `lab-kubeconform` | travel | `.github/workflows/ci.yml` | `v1.10.8` |
+| `actionlint` | wac | `.github/workflows/ci.yml` | `v1.10.8` |
+| `lab-gitops-deploy` | wac | `.github/workflows/ci.yml` | `v1.10.8` |
+| `lab-kubeconform` | wac | `.github/workflows/ci.yml` | `v1.10.8` |
 | `actionlint` | wac.plugins | `.github/workflows/ci.yml` | `v1.10.5` |
 | `actionlint` | will-fell | `.github/workflows/pr.yml` | `v1.6.0` |
 | `nextjs-site-check` | will-fell | `.github/workflows/pr.yml` | `v1.6.0` |
@@ -60,19 +60,23 @@ than no table, because the walk it drives silently skips whatever it forgot.
 These still pin real tags and would still run if triggered, so they are recorded
 rather than deleted. They are simply out of scope for a bump walk.
 
-## Known gap as of 2026-09-06
+## Closed gap, 2026-09-07
 
-`lab-gitops-deploy` and `lab-kubeconform` sit at **`v1.9.4`** in all four GitOps
-consumers (finance, flight-checker, travel, wac), while `actionlint` in those
-same files is at `v1.10.5`. Those repos were bumped for the actionlint fixes and
-not for anything else.
+`lab-gitops-deploy` and `lab-kubeconform` sat at `v1.9.4` in all four GitOps
+consumers while `actionlint` in the same files was at `v1.10.5` -- those repos
+had been bumped for the actionlint fixes and for nothing else. The consequence
+was that the `argo-await-sync` fixes were deployed nowhere.
 
-The consequence is specific: **`v1.10.6` — the `argo-await-sync` fix that rejects
-torn reads and unproven Running hooks — is deployed nowhere.** It ships in
-`lab-gitops-deploy`, which every one of those four still pins three minor
-versions behind. That is a deploy-verification bug fixed in this repo and live in
-no consumer, and it is exactly the failure a partial bump walk produces. Bumping
-those four to `v1.10.6` is owed.
+Closed by finance#100, flight-checker#95 and wac#70; travel was already ahead.
+All four now pin `v1.10.8`, and all three components in each file carry the same
+tag, which is free: `git diff --name-only v1.10.5 v1.10.8` is `scripts/` and
+docs, so `actionlint` and `lab-kubeconform` are byte-identical across that move.
+
+The gap hid for a reason worth keeping in view. `v1.9.1` through `v1.10.8` touch
+only `scripts/`, which reads as "no component changed" from a file list --
+`scripts/` is owned by `lab-gitops-deploy` and nothing else says so except the
+components column in `CHANGELOG.md`. A bump walk driven by file lists rather
+than by that column will miss this class of release every time.
 
 ## How to regenerate this table
 

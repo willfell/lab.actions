@@ -19,6 +19,8 @@ Reading the table:
 
 | Tag | Date | Components changed | What |
 |---|---|---|---|
+| `v1.10.8` | 2026-09-07 | `lab-gitops-deploy` | `argo-await-sync` proves a frozen hook by the Job itself |
+| `v1.10.7` | 2026-09-07 | `lab-gitops-deploy` | `argo-await-sync` trusts the hook, not the operation's initiator |
 | `v1.10.6` | 2026-09-05 | `lab-gitops-deploy` | `argo-await-sync` rejects torn reads and Running hooks it cannot prove |
 | `v1.10.5` | 2026-09-04 | `actionlint` | fails the caller when a job asks for a GitHub-hosted runner |
 | `v1.10.4` | 2026-09-04 | `lab-tofu-apply`, `lab-tofu-plan` | install `gh` where the override label needs it |
