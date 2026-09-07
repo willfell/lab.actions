@@ -36,9 +36,9 @@ than no table, because the walk it drives silently skips whatever it forgot.
 | `lab-tofu-apply` | terraform-global | `.github/workflows/tofu-apply.yml` | `v1.10.5` |
 | `lab-tofu-plan` | terraform-global | `.github/workflows/tofu-plan.yml` | `v1.10.5` |
 | `lab-tofu-validate` | terraform-global | `.github/workflows/tofu-plan.yml` | `v1.10.5` |
-| `actionlint` | travel | `.github/workflows/ci.yml` | `v1.10.5` |
-| `lab-gitops-deploy` | travel | `.github/workflows/ci.yml` | `v1.9.4` |
-| `lab-kubeconform` | travel | `.github/workflows/ci.yml` | `v1.9.4` |
+| `actionlint` | travel | `.github/workflows/ci.yml` | `v1.10.6` |
+| `lab-gitops-deploy` | travel | `.github/workflows/ci.yml` | `v1.10.6` |
+| `lab-kubeconform` | travel | `.github/workflows/ci.yml` | `v1.10.6` |
 | `actionlint` | wac | `.github/workflows/ci.yml` | `v1.10.5` |
 | `lab-gitops-deploy` | wac | `.github/workflows/ci.yml` | `v1.9.4` |
 | `lab-kubeconform` | wac | `.github/workflows/ci.yml` | `v1.9.4` |
