@@ -1,0 +1,20 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: lab-actions
+  description: Composite GitHub Actions and reusable workflows shared across the fleet; consumed at exact patch tags
+  annotations:
+    github.com/project-slug: willfell/wac.lab.actions
+    backstage.io/techdocs-ref: dir:.
+  links:
+    - url: https://github.com/willfell/wac.lab.actions/blob/main/CONSUMERS.md
+      title: Consumers
+      icon: github
+    - url: https://github.com/willfell/wac.lab.actions/blob/main/CHANGELOG.md
+      title: Changelog
+      icon: github
+spec:
+  type: library
+  lifecycle: production
+  owner: group:default/owners
+  system: platform
