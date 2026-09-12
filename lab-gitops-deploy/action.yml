@@ -4,6 +4,9 @@ inputs:
   image:
     description: Image name, also the default deployment name (e.g. finance-app)
     required: true
+  extra_images:
+    description: Space-separated additional image names pinned to the same sha in the same deploy commit (e.g. wealth-garmin); empty disables
+    default: ""
   argo_app:
     description: Argo CD Application to sync and wait on
     required: true
@@ -126,6 +129,7 @@ runs:
       shell: bash
       env:
         IMAGE: ${{ inputs.image }}
+        EXTRA_IMAGES: ${{ inputs.extra_images }}
         PULL_REGISTRY: ${{ inputs.pull_registry }}
         KUSTOMIZE_DIR: ${{ inputs.kustomize_dir }}
       run: |
@@ -137,6 +141,9 @@ runs:
           git fetch origin main
           git checkout -B ci-pin origin/main
           (cd "$KUSTOMIZE_DIR" && kustomize edit set image "$IMAGE=$PULL_REGISTRY/$IMAGE:$GITHUB_SHA")
+          for extra in $EXTRA_IMAGES; do
+            (cd "$KUSTOMIZE_DIR" && kustomize edit set image "$extra=$PULL_REGISTRY/$extra:$GITHUB_SHA")
+          done
           git add "$KUSTOMIZE_DIR/kustomization.yaml"
           if git diff --cached --quiet; then
             pinned=$(git rev-parse HEAD)

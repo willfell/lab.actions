@@ -237,6 +237,7 @@ finance, flight-checker, and wac each carried and drifted independently.
 | Input | Meaning | Default |
 | --- | --- | --- |
 | `image` | Image name, also the default deployment name | required |
+| `extra_images` | Space-separated additional image names pinned to the same sha inside the same deploy commit; empty disables | `""` |
 | `argo_app` | Argo CD Application to sync and wait on | required |
 | `namespace` | Namespace holding the deployment | required |
 | `deploy_ssh_key` | Write-scoped deploy key authorizing the commit-back push | required |
